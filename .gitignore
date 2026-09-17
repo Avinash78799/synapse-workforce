@@ -1,0 +1,13 @@
+.env
+.env.*
+.secrets/
+*.pem
+*.key
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+.next/
+*.log
+*.tsbuildinfo
+artifacts/

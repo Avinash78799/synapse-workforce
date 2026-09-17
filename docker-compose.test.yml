@@ -1,0 +1,40 @@
+# Entirely disposable native PostgreSQL / Redis test stack. No host ports.
+name: workforce-verification
+services:
+  postgres-test:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: workforce_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: isolated-test-owner
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d workforce_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  redis-test:
+    image: redis:7.4-alpine
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  tests:
+    build: {context: ., dockerfile: infrastructure/Dockerfile.api}
+    command: [python, -m, pytest, -q, -p, no:cacheprovider]
+    environment:
+      TEST_DATABASE_URL: postgresql://postgres:isolated-test-owner@postgres-test:5432/workforce_test
+      MIGRATION_DATABASE_URL: postgresql://postgres:isolated-test-owner@postgres-test:5432/workforce_test
+      DATABASE_URL: postgresql://wf_app:test-app@postgres-test:5432/workforce_test
+      AUTH_DATABASE_URL: postgresql://wf_auth:test-auth@postgres-test:5432/workforce_test
+      DISPATCH_DATABASE_URL: postgresql://wf_dispatch:test-dispatch@postgres-test:5432/workforce_test
+      APP_DB_PASSWORD: test-app
+      AUTH_DB_PASSWORD: test-auth
+      DISPATCH_DB_PASSWORD: test-dispatch
+      REDIS_URL: redis://redis-test:6379/15
+      SEED_PASSWORD: isolated-test-password
+      MODEL_PROVIDER: simulation
+    depends_on:
+      postgres-test: {condition: service_healthy}
+      redis-test: {condition: service_healthy}

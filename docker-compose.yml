@@ -1,0 +1,140 @@
+name: agent-workforce
+
+x-runtime: &runtime
+  DATABASE_URL: postgresql://wf_app:${APP_DB_PASSWORD:?Run configure_local.py}@postgres:5432/workforce
+  AUTH_DATABASE_URL: postgresql://wf_auth:${AUTH_DB_PASSWORD:?Run configure_local.py}@postgres:5432/workforce
+  REDIS_URL: redis://redis:6379/0
+  WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+  SECURE_COOKIES: ${SECURE_COOKIES:-false}
+  MODEL_PROVIDER: ${MODEL_PROVIDER:-simulation}
+  LLM_BASE_URL: ${LLM_BASE_URL:-}
+  LLM_MODEL: ${LLM_MODEL:-}
+  LLM_SECRET_REF: ${LLM_SECRET_REF:-platform/llm}
+  LLM_INPUT_USD_PER_MILLION: ${LLM_INPUT_USD_PER_MILLION:-0}
+  LLM_OUTPUT_USD_PER_MILLION: ${LLM_OUTPUT_USD_PER_MILLION:-0}
+  DAILY_MODEL_BUDGET_USD: ${DAILY_MODEL_BUDGET_USD:-5}
+  GROQ_API_KEY: ${GROQ_API_KEY:-}
+  GROQ_MODEL: ${GROQ_MODEL:-qwen/qwen3.8-27b}
+  GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+  GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+  GOOGLE_MODEL: ${GOOGLE_MODEL:-gemini-3.6-flash}
+  GOOGLE_BASE_URL: ${GOOGLE_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  OPENROUTER_MODEL: ${OPENROUTER_MODEL:-nvidia/nemotron-3-super-120b-a12b:free}
+  OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+  MODEL_COOLDOWN_SECONDS: ${MODEL_COOLDOWN_SECONDS:-60}
+  COMMERCE_CONNECTOR: ${COMMERCE_CONNECTOR:-simulation}
+  PAYMENT_CONNECTOR: ${PAYMENT_CONNECTOR:-simulation}
+  HELPDESK_CONNECTOR: ${HELPDESK_CONNECTOR:-simulation}
+  EXTERNAL_CONNECTOR_BASE_URL: ${EXTERNAL_CONNECTOR_BASE_URL:-}
+  EXTERNAL_CONNECTOR_SECRET: ${EXTERNAL_CONNECTOR_SECRET:-}
+  VAULT_ADDR: ${VAULT_ADDR:-http://vault:8200}
+  VAULT_TOKEN_FILE: /run/secrets/vault_token
+  AUDIT_SIGNING_KEY_FILE: /run/secrets/audit_signing_key
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: workforce
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run configure_local.py}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d workforce"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine
+    command: [redis-server, --appendonly, 'yes']
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: {context: ., dockerfile: infrastructure/Dockerfile.api}
+    command: [python, -m, infrastructure.postgres.migrate]
+    environment:
+      MIGRATION_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/workforce
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      DISPATCH_DB_PASSWORD: ${DISPATCH_DB_PASSWORD}
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  seed:
+    build: {context: ., dockerfile: infrastructure/Dockerfile.api}
+    command: [python, -m, simulations.ecommerce.seed]
+    environment:
+      MIGRATION_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/workforce
+      SEED_PASSWORD: ${SEED_PASSWORD}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  api:
+    build: {context: ., dockerfile: infrastructure/Dockerfile.api}
+    environment: *runtime
+    secrets: [vault_token, audit_signing_key]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    build: {context: ., dockerfile: infrastructure/Dockerfile.api}
+    command: [python, -m, infrastructure.workers.worker]
+    environment:
+      <<: *runtime
+      DISPATCH_DATABASE_URL: postgresql://wf_dispatch:${DISPATCH_DB_PASSWORD}@postgres:5432/workforce
+    secrets: [vault_token, audit_signing_key]
+    healthcheck:
+      test: [CMD, python, -c, "import os,time; assert time.time()-os.stat('/tmp/workforce-worker.heartbeat').st_mtime < 20"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      api: {condition: service_healthy}
+
+  web:
+    build: apps/web
+    expose: ['3000']
+    depends_on:
+      api: {condition: service_healthy}
+
+  proxy:
+    image: nginx:alpine
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./.secrets/certs:/etc/ssl/certs:ro
+    depends_on:
+      api: {condition: service_healthy}
+
+  vault:
+    image: hashicorp/vault:1.20
+    profiles: [model]
+    entrypoint: [/bin/sh, -c]
+    command: ['export VAULT_DEV_ROOT_TOKEN_ID="$$(cat /run/secrets/vault_token)"; exec vault server -dev -dev-listen-address=0.0.0.0:8200']
+    cap_add: [IPC_LOCK]
+    secrets: [vault_token]
+    # Dev Vault is intentionally ephemeral. Use managed Vault/KMS for deployment.
+
+secrets:
+  audit_signing_key:
+    file: ./.secrets/audit_signing_key
+  vault_token:
+    file: ./.secrets/vault_token
+volumes:
+  postgres_data:
+  redis_data:

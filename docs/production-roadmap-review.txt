@@ -1,0 +1,200 @@
+AI AGENT WORKFORCE PLATFORM
+FROM V1 SIMULATION TO PRODUCTION-GRADE MARKET SERVICE
+Consolidated Review + Roadmap
+Prepared: 16 September 2026
+
+====================================================================
+EXECUTIVE SUMMARY
+====================================================================
+
+Current state: A working V1 simulation has been delivered -- two agents
+(Operations, Customer Support), a connected web dashboard, policy/approval
+engine, audit trail, and a 46-test automated suite (0 failures). The
+architecture (idempotency keys, row-level tenant isolation, immutable
+policy versions, verification-before-completion) is strong for a V1 and
+already reflects production-minded design decisions.
+
+Gap to production: The current build has not been run against native
+infrastructure (real PostgreSQL, real Docker boot, real worker
+concurrency), has no live LLM verified end-to-end, and has at least one
+open security gap (owner self-approval). None of these are large
+rewrites -- they are verification, hardening, and integration work on
+top of an already-sound design.
+
+Verdict: Strong enough to demo, pitch, and use as the technical
+foundation for a startup. Not yet safe to put in front of paying
+customers or real money. The plan below closes that gap in six phases.
+
+====================================================================
+SECTION A: IMMEDIATE FIX / ADD / IMPROVE LIST
+(from review of the V1 progress report)
+====================================================================
+
+A1. FIX -- Reporting accuracy (documentation, not code)
+--------------------------------------------------------
+- Reword "Docker packaged and delivered" claims: Compose YAML was parsed,
+  not built or booted. State clearly that native Docker boot is
+  unverified until it has actually been run end-to-end.
+- Move the PGlite-vs-native-Postgres caveat next to the "46 passed / 0
+  failures" headline, not a paragraph later -- the current placement lets
+  the test count read as stronger validation than it is.
+- State plainly that browser tests exercised a lightweight local
+  dispatcher, not the real worker supervisor -- so concurrency/crash
+  recovery claims remain unverified.
+- Clarify that autonomy levels 0-5 are only partly implemented: levels
+  0-2 share a single mutation-blocking boundary; 3-5 have no distinct
+  behavior yet.
+
+A2. FIX -- Security gaps (code/design, pre-production blockers)
+--------------------------------------------------------
+- Close owner self-approval: enforce requester != approver above a
+  configurable financial threshold. Currently the single biggest open
+  risk.
+- Re-run all SQL isolation/tenant-separation tests on native PostgreSQL
+  with real login roles (not PGlite transaction-local roles).
+- Confirm the app startup path rejects privileged or RLS-bypassing
+  runtime credentials -- currently unverified.
+- Add rate limiting and anomaly detection on the approval endpoint
+  (rapid approve/deny attempts, role escalation attempts).
+- Rotate short-lived Vault secret cache aggressively once managed
+  Vault/KMS is live; confirm cache entries do not survive a hard-abort.
+
+A3. ADD -- Product features worth building next
+--------------------------------------------------------
+- Live cost/budget dashboard for model spend (per-run and per-tenant),
+  once a real LLM provider is connected.
+- Dedicated UI for reviewing and resolving UNKNOWN-state (frozen)
+  actions -- the backend mechanism exists; it needs an operator-facing
+  front end.
+- Signed / exportable (hash-chained or write-once) audit trail, to
+  protect against a privileged database administrator tampering with
+  "append-only" history.
+- Per-skill autonomy overrides in the configuration UI -- needed once
+  more agent types (Finance, HR, Compliance) exist with different risk
+  profiles.
+- Real semantic embeddings to replace the current 64-dim hashed lexical
+  vectors, once a live model provider is chosen.
+
+A4. IMPROVE -- Testing before calling this production-ready
+--------------------------------------------------------
+- Chaos/failure injection: kill a worker mid-refund, kill Redis
+  mid-dispatch; confirm actions land in UNKNOWN state instead of
+  double-executing.
+- Concurrency/load testing: simultaneous Operations runs and
+  simultaneous approval decisions on the same case (not testable under
+  PGlite's single-backend limitation).
+- Approval race-condition test: two approvers acting on the same pending
+  action near-simultaneously.
+- Approval expiry edge cases: exactly at the 60-minute boundary, and
+  cross-timezone approver scenarios.
+- Auth penetration test: session fixation, token replay after logout,
+  CSRF token reuse across sessions.
+- Model-adapter adversarial test: prompt injection via retrieved
+  knowledge chunks, once a live LLM is wired in.
+- Budget-exhaustion test: confirm a tenant hitting its daily model
+  budget actually blocks new dispatch.
+- Full Docker cold-start test on a clean machine, timing it and
+  confirming health checks pass end-to-end.
+
+====================================================================
+SECTION B: PATH TO PRODUCTION-GRADE / MARKET-READY SERVICE
+====================================================================
+
+PHASE 0 -- Validate the product wedge
+--------------------------------------------------------
+Goal: Confirm there is a real, narrow, paying problem before building
+further.
+- Pick ONE workflow to lead with (e.g. duplicate-refund detection for a
+  specific ecommerce stack), not the full multi-agent vision at once.
+- Interview 10-15 real operations/support leads at target companies to
+  validate willingness to pay.
+- Define success metric for the wedge (e.g. hours saved per week,
+  refund error rate reduced).
+
+PHASE 1 -- Make the infrastructure real
+--------------------------------------------------------
+Goal: Everything currently simulated or unverified is run for real.
+- Full native Docker Compose build and boot, verified end-to-end.
+- Native PostgreSQL with real login roles; re-run all isolation/security
+  tests against it, including concurrency.
+- Wire one live LLM provider; verify response contracts, token usage
+  accounting, and budget enforcement against real spend.
+- Replace local dispatcher with the real worker supervisor; test crash
+  recovery, abandoned-job handling, graceful drain.
+- Move secrets to managed Vault/KMS (e.g. AWS Secrets Manager, HashiCorp
+  Vault Cloud, GCP Secret Manager).
+Estimated effort: 3-6 weeks solo, focused work.
+
+PHASE 2 -- Security and compliance hardening
+--------------------------------------------------------
+Goal: Safe to handle real customer data and real money.
+- Close owner self-approval (separation of duties) -- non-negotiable.
+- Independent third-party penetration test covering auth, RLS bypass,
+  approval race conditions, and the model-authorization boundary.
+- Data protection review: DPDP Act 2023 (India) at minimum; GDPR/CCPA if
+  serving EU/US customers.
+- Payment handling: integrate via a PCI-compliant processor (Stripe,
+  Razorpay) rather than storing/processing raw card data in-house.
+- Begin building toward SOC 2 readiness (access logging, change
+  management, incident response documentation) even if formal
+  certification is deferred.
+
+PHASE 3 -- Real integrations (core product work)
+--------------------------------------------------------
+Goal: Move from simulated Acme Commerce data to a real connected
+business system.
+- Build one production-grade connector (e.g. Shopify + Stripe, or
+  Zendesk + a payment gateway): OAuth, webhook handling, rate-limit
+  backoff, retry semantics.
+- Extensive sandbox testing before touching any live merchant's data.
+- Build real tenant onboarding: signup, scoped OAuth consent, "connect
+  your store/helpdesk" flow.
+Estimated effort: largest and most open-ended phase; scope depends on
+the chosen integration target.
+
+PHASE 4 -- Production SRE basics
+--------------------------------------------------------
+Goal: Operate reliably without manual babysitting.
+- CI/CD pipeline: build -> automated test -> staging -> production.
+- Monitoring and alerting: error rates, latency, queue depth, model
+  budget burn (e.g. Prometheus/Grafana or a hosted equivalent).
+- Backups with a tested restore procedure.
+- Incident runbook, even for a team of one -- specifically covering "an
+  agent took an incorrect action on a customer's real refund."
+- Structured logging and distributed tracing for multi-agent run
+  debugging in production.
+
+PHASE 5 -- Business and legal scaffolding
+--------------------------------------------------------
+Goal: Able to legally operate and contract as a company.
+- Company registration (e.g. Private Limited in India) to sign
+  contracts, hold a business account, and take payments.
+- Terms of Service, Privacy Policy, and a Data Processing Agreement
+  template.
+- Billing infrastructure (e.g. Stripe Billing) for subscription or
+  usage-based pricing.
+- Basic support channel with an honest, achievable SLA.
+
+PHASE 6 -- Go-to-market
+--------------------------------------------------------
+Goal: First real, paying (or at least real, active) usage.
+- Recruit 1-3 design partners to use the product free or discounted in
+  exchange for structured feedback.
+- Usage-based pricing (e.g. per resolved case/refund) generally fits an
+  agent product better than flat SaaS pricing.
+- Produce a case study or demo video from design-partner usage -- this,
+  not a feature list, is what sells an agent product.
+
+====================================================================
+SEQUENCING NOTE
+====================================================================
+
+Phases 1-2 build directly on the existing V1 codebase and are the most
+immediately actionable (roughly 3-6 weeks of focused solo work).
+Phase 3 is the largest and most open-ended engineering effort. Phases
+4-6 can run partly in parallel with Phase 3 once a design partner is
+identified, rather than waiting for every prior phase to fully close.
+
+====================================================================
+END OF DOCUMENT
+====================================================================

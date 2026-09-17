@@ -1,0 +1,196 @@
+AI AGENT WORKFORCE PLATFORM — V1.1 HARDENING UPDATE
+16 September 2026
+
+This update responds to the supplied "From V1 Simulation to Production-Grade
+Market Service" review. It builds on the existing Operations and Customer
+Support simulator; it does not claim that the complete market-service roadmap
+or production deployment is finished.
+
+VERIFIED STATUS
+
+72 automated tests passed; 9 native-only tests skipped; 0 failures/errors.
+These results used PGlite with explicit transaction-local roles, not native
+PostgreSQL login authentication or concurrency. Browser tests used a lightweight
+local dispatcher, not the real worker supervisor. Docker definitions were
+parsed, but Docker images were not built or booted here.
+
+The Next.js production build and desktop/mobile browser checks passed.
+The source includes detailed evidence and a native verification gate.
+
+WHAT WAS IMPLEMENTED
+
+1. Independent approval for financial actions
+
+The requester cannot approve or deny their own refund at or above the configured
+financial threshold, even if they are an owner. The default threshold is INR
+5,000, inclusive. A different authorized owner or finance approver must decide.
+The requirement is pinned to the approval and checked again before dispatch.
+Changing a policy cannot relax an already-pending approval. The threshold is
+configurable in the agent's policy interface and changes are audited.
+
+This enforces different authenticated identities. Local demo accounts still
+share a simulation password; production needs real separate identities and
+credential provisioning.
+
+2. Approval abuse controls
+
+Added atomic limits of 20 attempts per actor per minute and 200 per tenant per
+minute. Five rejected authorization attempts in five minutes temporarily block
+the actor for five minutes. Self-approval and invalid-role attempts create
+bounded audit signals visible to owners and finance approvers. These are
+rule-based signals, not a machine-learning anomaly detector.
+
+3. UNKNOWN-state review screen
+
+Added a Reconciliation page showing frozen actions, original arguments,
+receipt evidence, run links, and review reasons. Authorized reviewers can verify
+fresh provider evidence or close an action unresolved. The backend locks the
+run, checks the original arguments, and narrows database scope to the exact
+agent before looking up evidence.
+
+Neither choice retries a refund, sends a customer message, unfreezes other
+actions, clears a hard abort, or resumes the workflow. Missing evidence keeps
+the action frozen unless it is explicitly closed unresolved. Every review is
+audited.
+
+4. Authenticated audit chains and export
+
+New audit events use per-agent sequence numbers, previous-event hashes,
+SHA-256 digests, and HMAC authentication using a key stored outside PostgreSQL.
+The dashboard can download a verified JSON export. An offline verifier can
+check the export and compare it with a previously retained checkpoint.
+
+This provides tamper evidence, not write-once storage or a public-key signature.
+Independent retention of previous exports is necessary to detect tail deletion.
+An attacker who also controls the signing key/runtime is outside this boundary.
+Existing pre-upgrade audit events remain explicitly unsigned. Key rotation and
+backup instructions are included.
+
+5. Model cost and budget screen
+
+Added per-tenant daily limit, conservative reservations, available capacity,
+recorded run costs, uncertain-cost count, and recent per-run token/cost records.
+Simulation is clearly labeled and does not show invented live usage. Recorded
+cost and reserved capacity are separate figures. Daily recorded totals group
+runs by their creation date in UTC and are not a provider billing statement.
+
+Live provider billing is still unverified. Mock-provider tests now confirm that
+budget exhaustion blocks dispatch and malformed/adversarial output retains its
+conservative reservation.
+
+6. Per-skill autonomy controls
+
+Each skill can inherit agent autonomy or impose a lower cap. The effective level
+is the minimum across the agent and required skills, so a skill cannot raise
+authority. Configuration changes are audited.
+
+The review's statement about levels 3–5 was corrected: level 3 already required
+approval for every mutation. Levels 0–2 share preparation without mutation;
+levels 4–5 currently share controlled execution. Six distinct behavioral levels
+are not claimed.
+
+7. Secret and session hardening
+
+Removed reusable Vault integration-secret caching. Secret lookup checks the
+agent's active status and execution epoch before and after retrieval. There is
+no stale reusable cache entry to survive an abort. This does not revoke a
+request already accepted by a remote provider or guarantee memory erasure.
+
+Successful re-login invalidates the previous browser session. Tests cover token
+replay after logout, session rotation, and CSRF token reuse across sessions.
+The frontend clears workspace state when switching accounts and rejects stale
+responses from a previous session.
+
+8. Worker and hard-abort correction
+
+Found a locking issue where publishing the stop could wait behind a provider's
+receipt lock. The API now commits the stop epoch before touching those receipts.
+The supervisor can observe the stop, terminate the child, and freeze remaining
+dispatched receipts. Unexpected child exits also freeze uncertain dispatches.
+Run finalization preserves an already-aborted state.
+
+Native regression tests for real process interruption were added but could not
+be executed in this environment.
+
+9. Infrastructure and operational preparation
+
+Added a disposable native test/cold-start gate, CI workflow definition, worker
+heartbeat health check, database/Redis readiness checks, and structured request
+timing logs. The gate is designed to run real PostgreSQL roles/concurrency,
+worker crash and hard-abort tests, a full Docker cold boot, an independently
+approved refund through the real supervisor, and a Redis outage/recovery check.
+
+The gate creates its own temporary configuration, random project names, local
+port, and volumes. It does not stop or erase an existing application stack.
+The CI definition builds/tests; it does not deploy to production. Neither the
+native gate nor hosted CI has run here.
+
+10. Product and deployment handoff
+
+Added a roadmap coverage matrix, a proposed duplicate-charge/refund product
+wedge, a 10–15-interview guide, pilot metrics and acceptance criteria, a connector
+checklist, and incident/audit/backup/restore runbooks. No customer interviews,
+partner recruitment, external messages, company registration, compliance
+certification, billing launch, or production deployment were performed.
+
+TEST BREAKDOWN
+
+- 23 unit/policy checks passed.
+- 39 workflow/API/mock-provider checks passed.
+- 10 SQL isolation/security checks passed.
+- 9 native-only checks skipped.
+- Frontend production build and TypeScript passed.
+- Browser flows passed at 1440x1050 and 390x844, with no page errors or
+  document-level horizontal overflow observed.
+
+Browser coverage includes owner self-approval being blocked, a separate finance
+user approving the refund, verified completion, frozen-action review, budget
+reporting, authenticated audit download, and skill/policy configuration.
+
+The testing caveats above are part of these results. No production-readiness,
+model-accuracy, financial-savings, or real-customer-resolution claim is made.
+
+WHAT STILL NEEDS EXTERNAL RESOURCES
+
+- Docker-capable machine or hosted CI: execute the supplied native gate and
+  resolve any real startup, concurrency, or process-recovery findings.
+- Chosen model provider/model/endpoint and prices: qualify live output,
+  token usage, budgets, and billing. Configure credentials in the secrets
+  service, not in chat.
+- Managed Vault/KMS, hosting account, and domain: configure identities,
+  HTTPS, secure cookies, private networking, backups, monitoring, and alerts.
+- First ecommerce/helpdesk/payment stack and sandbox account access: build and
+  qualify ONE real connector with OAuth, signed webhooks, authoritative status
+  lookup, safe retries, and provider idempotency.
+- Chosen semantic embedding provider: define dimensions, cost and retention
+  requirements before replacing lexical simulation vectors and reindexing.
+- Independent security and relevant legal/privacy/payment reviews before
+  customer data or real-money use.
+- Actual target-customer interviews and 1–3 design partners to validate demand,
+  baseline metrics, pricing, and a supervised pilot.
+
+HOW TO USE THIS UPDATE
+
+New installation, from the extracted project directory:
+
+    python infrastructure/configure_local.py
+    docker compose up --build -d
+
+Existing V1 installation: preserve the current database and .env, then run:
+
+    python infrastructure/configure_audit.py
+    docker compose up --build -d
+
+Migration 002_hardening.sql is additive. Do not edit the original applied
+migration or discard your audit signing key.
+
+To run the prepared native gate on a Docker-capable machine:
+
+    python infrastructure/native_gate.py
+
+The latest source is in AI_Workforce_V1_Source.zip, now containing V1.1.
+AI_Workforce_Setup.md has the updated setup instructions.
+Full evidence: docs/verification.md and artifacts/.
+Roadmap mapping: docs/hardening-status.md.
+Product work: docs/product-validation.md.
+Operations: docs/operations-runbook.md.
