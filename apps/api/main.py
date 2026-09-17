@@ -45,7 +45,8 @@ async def request_boundary(request: Request, call_next):
     request_id = str(uuid4())
     if request.method not in {'GET','HEAD','OPTIONS'}:
         origin = request.headers.get('origin')
-        if origin and origin!=settings.web_origin:
+        allowed_origins = {o.rstrip('/') for o in {settings.web_origin, 'https://localhost', 'http://localhost:3000', 'https://127.0.0.1'} if o}
+        if origin and origin.rstrip('/') not in allowed_origins:
             return JSONResponse({'detail':'Origin is not allowed'},status_code=403)
         if int(request.headers.get('content-length','0'))>100_000:
             return JSONResponse({'detail':'Request body exceeds 100 KB'},status_code=413)
