@@ -35,9 +35,9 @@ def seed():
                 conn.execute('INSERT INTO auth_private.users(id,tenant_id,email,name,password_hash,role) VALUES(%s,%s,%s,%s,%s,%s)',
                              (identity(email),tenant,email,display,hash_password(password),role))
             for kind in ['operations','support']:
-                agent = identity(str(tenant)+kind)
-                conn.execute('INSERT INTO agents(id,tenant_id,kind,name,owner_name) VALUES(%s,%s,%s,%s,%s)',
-                             (agent,tenant,kind,'Operations Agent' if kind=='operations' else 'Customer Support Agent','Alex Morgan'))
+                tier = 'reasoning' if kind=='operations' else 'speed'
+                conn.execute('INSERT INTO agents(id,tenant_id,kind,name,owner_name,model_tier) VALUES(%s,%s,%s,%s,%s,%s)',
+                             (agent,tenant,kind,'Operations Agent' if kind=='operations' else 'Customer Support Agent','Alex Morgan',tier))
                 rules = PolicyRules().model_dump()
                 conn.execute('INSERT INTO agent_policies(tenant_id,agent_id,version,rules,created_by) VALUES(%s,%s,1,%s,%s)',(tenant,agent,Jsonb(rules),'bootstrap'))
                 conn.execute('INSERT INTO agent_versions(tenant_id,agent_id,version,definition) VALUES(%s,%s,%s,%s)',

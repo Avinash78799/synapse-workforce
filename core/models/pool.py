@@ -38,41 +38,55 @@ class MultiModelPool:
     _cooldowns: dict[str, float] = {}
     MAX_OUTPUT_TOKENS = 1000
 
-    def get_providers(self) -> list[ProviderNode]:
-        """Returns configured providers ordered by priority (fastest first)."""
+    def get_providers(self, role: str = 'default', model_tier: str | None = None) -> list[ProviderNode]:
+        """Returns configured providers ordered by priority based on agent role & model tier."""
+        tier = model_tier or 'balanced'
+        if tier == 'speed':
+            # Speed first: Groq (ultra-low latency) -> Google -> OpenRouter
+            priority_map = {'groq': 1, 'google': 2, 'openrouter': 3, 'custom_llm': 4}
+        elif tier == 'reasoning':
+            # Deep reasoning first: Google (high context / multi-entity planning) -> Groq -> OpenRouter
+            priority_map = {'google': 1, 'groq': 2, 'openrouter': 3, 'custom_llm': 4}
+        elif tier == 'broad_scale':
+            # Broad parameter scale first: OpenRouter (120B parameter reserve) -> Google -> Groq
+            priority_map = {'openrouter': 1, 'google': 2, 'groq': 3, 'custom_llm': 4}
+        else:
+            # Default balanced fallback (fastest first)
+            priority_map = {'groq': 1, 'google': 2, 'openrouter': 3, 'custom_llm': 4}
+
         nodes = []
-        # Groq (Priority 1 - ultra-low latency inference ~300 t/s)
+        # Groq (ultra-low latency inference ~300 t/s)
         groq_key = settings.groq_api_key or (settings.llm_api_key if 'gsk_' in settings.llm_api_key else '')
         nodes.append(ProviderNode(
             name='groq',
             base_url=settings.groq_base_url.rstrip('/'),
             model=settings.groq_model,
             api_key=groq_key,
-            priority=1,
+            priority=priority_map.get('groq', 1),
             input_usd_per_million=settings.groq_input_usd_per_million,
             output_usd_per_million=settings.groq_output_usd_per_million
         ))
 
-        # Google Gemini (Priority 2 - state-of-the-art reasoning, 1,500 req/day free)
+        # Google Gemini (state-of-the-art reasoning, 1,500 req/day free)
         google_key = settings.google_api_key or (settings.llm_api_key if 'AIzaSy' in settings.llm_api_key else '')
         nodes.append(ProviderNode(
             name='google',
             base_url=settings.google_base_url.rstrip('/'),
             model=settings.google_model,
             api_key=google_key,
-            priority=2,
+            priority=priority_map.get('google', 2),
             input_usd_per_million=settings.google_input_usd_per_million,
             output_usd_per_million=settings.google_output_usd_per_million
         ))
 
-        # OpenRouter (Priority 3 - broad free fallback pool)
+        # OpenRouter (broad free fallback pool)
         openrouter_key = settings.openrouter_api_key or (settings.llm_api_key if 'sk-or-' in settings.llm_api_key else '')
         nodes.append(ProviderNode(
             name='openrouter',
             base_url=settings.openrouter_base_url.rstrip('/'),
             model=settings.openrouter_model,
             api_key=openrouter_key,
-            priority=3,
+            priority=priority_map.get('openrouter', 3),
             input_usd_per_million=settings.openrouter_input_usd_per_million,
             output_usd_per_million=settings.openrouter_output_usd_per_million
         ))
@@ -84,7 +98,7 @@ class MultiModelPool:
                 base_url=settings.llm_base_url.rstrip('/'),
                 model=settings.llm_model,
                 api_key=settings.llm_api_key,
-                priority=4,
+                priority=priority_map.get('custom_llm', 4),
                 input_usd_per_million=settings.input_usd_per_million,
                 output_usd_per_million=settings.output_usd_per_million
             ))
@@ -135,7 +149,7 @@ class MultiModelPool:
                             continue
         return s
 
-    def understand(self, kind: str, objective: str, tenant_id: str, entity_id: str | None = None) -> ModelResult:
+    def understand(self, kind: str, objective: str, tenant_id: str, entity_id: str | None = None, model_tier: str | None = None) -> ModelResult:
         system = METADATA_EXTRACTOR + '\nSERVER ENVELOPE:\n' + json.dumps({
             'tenant_id': str(tenant_id),
             'agent_scope': kind,
@@ -147,7 +161,7 @@ class MultiModelPool:
         if upper_input + self.MAX_OUTPUT_TOKENS > settings.max_run_tokens:
             raise RuntimeError('Input is too large for the configured model budget')
 
-        providers = [p for p in self.get_providers() if p.api_key and p.base_url and p.model]
+        providers = [p for p in self.get_providers(role=kind, model_tier=model_tier) if p.api_key and p.base_url and p.model]
         candidates = [p for p in providers if not self.is_in_cooldown(p.name)]
         if not candidates:
             raise RuntimeError('No configured model provider is available outside cooldown')

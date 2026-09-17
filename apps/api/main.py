@@ -390,6 +390,21 @@ def autonomy(agent_id: UUID,body: Autonomy,user=Depends(current_user)):
     return {'level':body.level}
 
 
+class ModelTierInput(Body):
+    model_tier: Literal['speed', 'reasoning', 'broad_scale', 'balanced']
+
+
+@app.put('/api/agents/{agent_id}/model_tier')
+def update_agent_model_tier(agent_id: UUID, body: ModelTierInput, user=Depends(current_user)):
+    require(user, 'owner', 'operator')
+    with scoped(user['tenant_id'], agent_id) as conn:
+        agent = find_agent(conn, agent_id, lock=True)
+        conn.execute('UPDATE agents SET model_tier=%s WHERE id=%s', (body.model_tier, agent_id))
+        audit(conn, user['tenant_id'], agent_id, 'agent.model_tier.updated', 'completed',
+              actor=user['id'], policy=agent['policy_version'], details={'model_tier': body.model_tier})
+    return {'ok': True, 'model_tier': body.model_tier}
+
+
 @app.get('/api/simulation/{agent_id}')
 def simulation(agent_id: UUID,user=Depends(current_user)):
     with scoped(user['tenant_id'],agent_id) as conn:

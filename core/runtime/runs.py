@@ -97,7 +97,7 @@ def _process(tenant, agent_id, run_id):
             with scoped(tenant,agent_id) as consent_conn:
                 if not workflow_consent(consent_conn, tenant, agent['kind'], run['input']):
                     raise PermissionError('Purpose consent is missing or withdrawn')
-                model = get_model().understand(agent['kind'],run['objective'],str(tenant),run['input'].get('order_id'))
+                model = get_model().understand(agent['kind'],run['objective'],str(tenant),run['input'].get('order_id'),model_tier=agent.get('model_tier'))
             expected = 'daily_operations' if agent['kind']=='operations' else 'resolve_ticket'
             if model.suggestion.intent!=expected:
                 raise ValueError('This objective is outside the selected agent workflow')
