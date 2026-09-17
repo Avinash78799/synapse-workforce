@@ -1,6 +1,13 @@
 from uuid import uuid4
 from core.models.providers import get_embedding_provider
+from core.config import settings
 from core.security.payment_data import redact_payment_data
+
+
+def embedding_identity():
+    if settings.embedding_provider == 'simulation':
+        return 'simulation:lexical-v1:64'
+    return '|'.join((settings.embedding_provider, settings.embedding_base_url or settings.llm_base_url, settings.embedding_model, '64'))
 
 
 def ingest(conn, tenant, agent, title, content):
@@ -12,8 +19,8 @@ def ingest(conn, tenant, agent, title, content):
     for start in range(0,len(content),800):
         chunk = content[start:start+1000]
         vector = str(embedder.embed(chunk))
-        conn.execute('INSERT INTO knowledge_chunks(id,tenant_id,agent_id,document_id,content,embedding) VALUES(%s,%s,%s,%s,%s,%s::vector)',
-                     (uuid4(),tenant,agent,document,chunk,vector))
+        conn.execute('INSERT INTO knowledge_chunks(id,tenant_id,agent_id,document_id,content,embedding,embedding_identity) VALUES(%s,%s,%s,%s,%s,%s::vector,%s)',
+                     (uuid4(),tenant,agent,document,chunk,vector,embedding_identity()))
     return document
 
 
@@ -23,10 +30,10 @@ def retrieve(conn, tenant, agent, query, limit=4):
     embedder = get_embedding_provider()
     vector = str(embedder.embed(query))
     return conn.execute('''WITH scoped_chunks AS MATERIALIZED (
-       SELECT id,document_id,content,embedding FROM knowledge_chunks WHERE tenant_id=%s AND agent_id=%s
+       SELECT id,document_id,content,embedding FROM knowledge_chunks WHERE tenant_id=%s AND agent_id=%s AND embedding_identity=%s
       ) SELECT id,document_id,content,1-(embedding <=> %s::vector) AS similarity
         FROM scoped_chunks ORDER BY embedding <=> %s::vector LIMIT %s''',
-      (tenant,agent,vector,vector,limit)).fetchall()
+      (tenant,agent,embedding_identity(),vector,vector,limit)).fetchall()
 
 
 def format_retrieved_context(chunks: list[dict]) -> str:

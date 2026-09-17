@@ -12,6 +12,7 @@ from psycopg.types.json import Jsonb
 
 def record_consent(conn: Any, tenant_id: str, principal_id: str, purpose: str, notice_version: str = '1.0', metadata: dict | None = None) -> dict:
     """Records an affirmative consent for a specified processing purpose."""
+    consent_lock(conn, tenant_id, exclusive=True)
     consent_id = uuid4()
     meta = metadata or {}
     query = """
@@ -46,6 +47,7 @@ def verify_consent(conn: Any, tenant_id: str, principal_id: str, purpose: str) -
 
 def withdraw_consent(conn: Any, tenant_id: str, principal_id: str, purpose: str | None = None) -> int:
     """Withdraws consent per Section 6(4). If purpose is omitted, all consents are withdrawn."""
+    consent_lock(conn, tenant_id, exclusive=True)
     if purpose:
         query = """
         UPDATE data_consents
@@ -74,3 +76,32 @@ def list_consents(conn: Any, tenant_id: str, principal_id: str) -> list[dict]:
     """
     rows = conn.execute(query, (tenant_id, principal_id)).fetchall()
     return [dict(r) for r in rows]
+
+
+PURPOSES = {'support': 'support.order_resolution', 'operations': 'operations.fulfillment'}
+
+
+def consent_lock(conn, tenant_id, *, exclusive=False):
+    # A withdrawal commits only after any already-authorized in-flight call ends.
+    # Shared locks permit concurrent agent calls; withdrawal/erasure take exclusive.
+    function = 'pg_advisory_xact_lock' if exclusive else 'pg_advisory_xact_lock_shared'
+    conn.execute('SELECT ' + function + '(hashtextextended(%s,904))', (str(tenant_id),))
+
+
+def workflow_consent(conn, tenant_id, kind, inputs):
+    from core.config import settings
+    consent_lock(conn, tenant_id)
+    purpose = PURPOSES.get(kind)
+    if not purpose:
+        return False
+    if kind == 'support':
+        principal = inputs.get('customer_id')
+        if not principal:
+            return False
+        return verify_consent(conn, tenant_id, principal, purpose)
+    # The current Operations workflow inspects the entire scoped simulator.
+    # A remote batch must provide a trusted principal manifest before it can run.
+    if settings.commerce_connector != 'simulation' or settings.external_connector_base_url:
+        return False
+    customers = conn.execute("SELECT id FROM sim_records WHERE tenant_id=%s AND kind='customer'", (tenant_id,)).fetchall()
+    return bool(customers) and all(verify_consent(conn, tenant_id, c['id'], purpose) for c in customers)

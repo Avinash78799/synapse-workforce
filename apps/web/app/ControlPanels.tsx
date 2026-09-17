@@ -32,3 +32,30 @@ export function ApprovalSignals({api,role}:{api:Api;role:string}){
  if(!rows.length)return null;
  return <section className="panel"><div className="panel-heading"><h2>Approval security signals</h2><span className="subtle">Latest 50 · Repeated signals grouped for 60 seconds</span></div><div className="table-scroll"><table><thead><tr><th>Signal</th><th>Actor</th><th>Time</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{r.details.signal.replaceAll('_',' ')}</td><td className="mono">{r.actor.slice(0,8)}</td><td>{new Date(r.created_at).toLocaleString()}</td></tr>)}</tbody></table></div></section>
 }
+
+export function PrivacyPanel({api,role}:{api:Api;role:string}){
+ const [principal,setPrincipal]=useState(''),[purpose,setPurpose]=useState('support.order_resolution'),[evidence,setEvidence]=useState(''),[affirmed,setAffirmed]=useState(false),[rows,setRows]=useState<any[]>([]),[message,setMessage]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[confirmErase,setConfirmErase]=useState(false);
+ const allowed=['owner','operator'].includes(role);
+ const run=async(action:string)=>{setBusy(true);setError('');setMessage('');try{
+   const body={data_principal_id:principal.trim()};
+   if(action==='load'){const r=await api('/privacy/consent/'+encodeURIComponent(principal.trim()));setRows(r.consents)}
+   if(action==='grant'){await api('/privacy/consent','POST',{...body,purpose,notice_version:'1.0',metadata:{evidence_reference:evidence.trim(),operator_attestation:true}});setMessage('Consent recorded for this purpose.');setAffirmed(false)}
+   if(action==='withdraw'){await api('/privacy/consent/withdraw','POST',{...body,purpose});setMessage('Consent withdrawn. New dispatches for this purpose are blocked. Already accepted external actions require reconciliation.')}
+   if(action==='export'){const r=await api('/privacy/dsar','POST',body);const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='privacy-export.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setMessage('Operational export downloaded. Processor disclosures still require review.')}
+   if(action==='erase'){const r=await api('/privacy/erase','POST',body);setMessage(r.notice);setConfirmErase(false)}
+   if(action!=='load'){const r=await api('/privacy/consent/'+encodeURIComponent(principal.trim()));setRows(r.consents)}
+ }catch(e){setError(e instanceof Error?e.message:'Privacy request failed')}finally{setBusy(false)}};
+ if(!allowed)return <section className="panel"><h2>Privacy controls</h2><p>An owner or operator manages customer privacy requests.</p></section>;
+ return <section className="panel"><h2>Customer privacy controls</h2><p>Record consent only after verifying the customer’s request and the applicable notice. Withdrawing consent blocks future workflow actions.</p>
+ <label>Customer reference<input value={principal} maxLength={100} onChange={e=>{setPrincipal(e.target.value);setRows([]);setConfirmErase(false)}} placeholder="CUS-001"/></label>
+ <label>Purpose<select value={purpose} onChange={e=>setPurpose(e.target.value)}><option value="support.order_resolution">Support: order resolution</option><option value="operations.fulfillment">Operations: fulfillment</option></select></label>
+ <label>Consent evidence reference<input value={evidence} maxLength={300} onChange={e=>setEvidence(e.target.value)} placeholder="Verified request or consent receipt reference"/></label>
+ <label><input type="checkbox" checked={affirmed} onChange={e=>setAffirmed(e.target.checked)}/> I verified affirmative consent for this purpose and notice.</label>
+ <div className="filters"><button className="button secondary" disabled={busy||!principal.trim()} onClick={()=>run('load')}>View consent</button><button className="button primary" disabled={busy||!principal.trim()||!affirmed||evidence.trim().length<3} onClick={()=>run('grant')}>Record consent</button><button className="button secondary" disabled={busy||!principal.trim()} onClick={()=>run('withdraw')}>Withdraw consent</button><button className="button secondary" disabled={busy||!principal.trim()} onClick={()=>run('export')}>Export data</button></div>
+ {error&&<p role="alert" className="banner error">{error}</p>}{message&&<p role="status" className="banner success">{message}</p>}
+ <ul>{rows.map((r,i)=><li key={r.id||i}>{r.purpose}: {r.status}</li>)}</ul>
+ <h3>Erase operational data</h3><p>This removes matched memories and knowledge documents and scrubs customer details. Active runs must be finished or aborted first. Financial evidence, audit history, backups and external copies remain subject to retention review.</p>
+ <label><input type="checkbox" checked={confirmErase} onChange={e=>setConfirmErase(e.target.checked)}/> I verified this erasure request and understand the operational changes cannot be undone.</label>
+ <button className="button secondary" disabled={busy||!principal.trim()||!confirmErase} onClick={()=>run('erase')}>Scrub operational data</button>
+ </section>
+}

@@ -34,8 +34,9 @@ class ProviderNode:
 class MultiModelPool:
     """Adaptive model pool managing automatic failover and latency-optimal routing."""
 
-    def __init__(self):
-        self._cooldowns: dict[str, float] = {}
+    # Shared within a worker process; Redis budget enforcement is cross-process.
+    _cooldowns: dict[str, float] = {}
+    MAX_OUTPUT_TOKENS = 1000
 
     def get_providers(self) -> list[ProviderNode]:
         """Returns configured providers ordered by priority (fastest first)."""
@@ -48,8 +49,8 @@ class MultiModelPool:
             model=settings.groq_model,
             api_key=groq_key,
             priority=1,
-            input_usd_per_million=0.59,
-            output_usd_per_million=0.79
+            input_usd_per_million=settings.groq_input_usd_per_million,
+            output_usd_per_million=settings.groq_output_usd_per_million
         ))
 
         # Google Gemini (Priority 2 - state-of-the-art reasoning, 1,500 req/day free)
@@ -60,8 +61,8 @@ class MultiModelPool:
             model=settings.google_model,
             api_key=google_key,
             priority=2,
-            input_usd_per_million=0.10,
-            output_usd_per_million=0.40
+            input_usd_per_million=settings.google_input_usd_per_million,
+            output_usd_per_million=settings.google_output_usd_per_million
         ))
 
         # OpenRouter (Priority 3 - broad free fallback pool)
@@ -72,8 +73,8 @@ class MultiModelPool:
             model=settings.openrouter_model,
             api_key=openrouter_key,
             priority=3,
-            input_usd_per_million=0.00,
-            output_usd_per_million=0.00
+            input_usd_per_million=settings.openrouter_input_usd_per_million,
+            output_usd_per_million=settings.openrouter_output_usd_per_million
         ))
 
         # Also support general custom LLM configuration if set and not already in nodes
@@ -84,8 +85,8 @@ class MultiModelPool:
                 model=settings.llm_model,
                 api_key=settings.llm_api_key,
                 priority=4,
-                input_usd_per_million=settings.input_usd_per_million or 2.50,
-                output_usd_per_million=settings.output_usd_per_million or 10.00
+                input_usd_per_million=settings.input_usd_per_million,
+                output_usd_per_million=settings.output_usd_per_million
             ))
 
         return sorted(nodes, key=lambda p: p.priority)
@@ -143,61 +144,43 @@ class MultiModelPool:
         sanitized_objective = redact_pii(objective)
         trimmed_objective = sanitized_objective.encode()[:2500].decode(errors='ignore')
         upper_input = len(system.encode()) + len(trimmed_objective.encode()) + 500
-        if upper_input > settings.max_run_tokens:
+        if upper_input + self.MAX_OUTPUT_TOKENS > settings.max_run_tokens:
             raise RuntimeError('Input is too large for the configured model budget')
 
-        # Conservative reservation across providers
-        max_in_price = Decimal('2.50')
-        max_out_price = Decimal('10.00')
-        reserve = int((Decimal(upper_input) * max_in_price + Decimal(500) * max_out_price).to_integral_value(rounding=ROUND_CEILING))
+        providers = [p for p in self.get_providers() if p.api_key and p.base_url and p.model]
+        candidates = [p for p in providers if not self.is_in_cooldown(p.name)]
+        if not candidates:
+            raise RuntimeError('No configured model provider is available outside cooldown')
+        errors = []
+        for provider in candidates:
+            # Reserve every attempt, including retries after ambiguous/billable failures.
+            # Reservation failures must never be handled as provider failover.
+            self._reserve(provider, tenant_id, upper_input)
+            try:
+                result = self._dispatch(provider, system, trimmed_objective, tenant_id, kind, entity_id, upper_input)
+                self.clear_cooldown(provider.name)
+                return result
+            except Exception:
+                self.set_cooldown(provider.name)
+                errors.append(provider.name)
+        raise RuntimeError('Model providers failed validation or were unavailable: ' + ', '.join(errors))
 
-        budget_key = f"workforce:model-budget:{tenant_id}:{datetime.now(timezone.utc).date()}"
+    def _reserve(self, provider, tenant_id, upper_input):
+        prices = [Decimal(str(provider.input_usd_per_million)), Decimal(str(provider.output_usd_per_million))]
+        budget = Decimal(str(settings.daily_model_budget_usd))
+        if any(not price.is_finite() or price < 0 for price in prices) or not budget.is_finite() or budget <= 0:
+            raise RuntimeError('Explicit nonnegative prices and a positive model budget are required')
+        reserve = int((Decimal(upper_input) * prices[0] + Decimal(self.MAX_OUTPUT_TOKENS) * prices[1]).to_integral_value(rounding=ROUND_CEILING))
+        key = f"workforce:model-budget:{tenant_id}:{datetime.now(timezone.utc).date()}"
         try:
             redis = Redis.from_url(settings.redis_url)
             permitted = redis.eval(
                 "local n=tonumber(redis.call('GET',KEYS[1]) or '0'); if n+tonumber(ARGV[1])>tonumber(ARGV[2]) then return 0 end; redis.call('INCRBY',KEYS[1],ARGV[1]); redis.call('EXPIRE',KEYS[1],172800); return 1",
-                1, budget_key, reserve, int(settings.daily_model_budget_usd * 1_000_000)
-            )
-            if not permitted:
-                raise RuntimeError('Tenant daily model budget exhausted')
-        except Exception as exc:
-            if 'budget exhausted' in str(exc):
-                raise
-
-        providers = self.get_providers()
-        # Find active providers with an API key
-        available = [p for p in providers if p.api_key or p.base_url]
-        if not available:
-            # If no provider keys configured, use the full list allowing mock/proxy
-            available = providers
-
-        # Filter out those in cooldown; if all are cooling down, attempt all to break deadlock
-        healthy = [p for p in available if not self.is_in_cooldown(p.name)]
-        candidates = healthy if healthy else available
-
-        errors = []
-        for provider in candidates:
-            try:
-                result = self._dispatch(provider, system, trimmed_objective, tenant_id, kind, entity_id, upper_input)
-                self.clear_cooldown(provider.name)
-                return result
-            except Exception as e:
-                # Put provider in cooldown on rate limit, quota, timeout, or server error
-                self.set_cooldown(provider.name)
-                errors.append(f"{provider.name}: {str(e)[:100]}")
-
-        # If we reached here, candidates failed; try any remaining providers
-        remaining = [p for p in available if p not in candidates]
-        for provider in remaining:
-            try:
-                result = self._dispatch(provider, system, trimmed_objective, tenant_id, kind, entity_id, upper_input)
-                self.clear_cooldown(provider.name)
-                return result
-            except Exception as e:
-                self.set_cooldown(provider.name)
-                errors.append(f"{provider.name}: {str(e)[:100]}")
-
-        raise RuntimeError(f"All model providers in pool failed or were rate-limited: {'; '.join(errors)}")
+                1, key, reserve, int(budget * 1_000_000))
+        except Exception:
+            raise RuntimeError('Model budget service unavailable; dispatch blocked') from None
+        if permitted != 1:
+            raise RuntimeError('Tenant daily model budget exhausted')
 
     def _dispatch(self, provider: ProviderNode, system: str, objective: str, tenant_id: str, kind: str, entity_id: str | None, upper_input: int) -> ModelResult:
         headers = {'Content-Type': 'application/json'}
@@ -210,7 +193,7 @@ class MultiModelPool:
                 {'role': 'system', 'content': system},
                 {'role': 'user', 'content': objective[:4000]}
             ],
-            'max_tokens': 1000,
+            'max_tokens': self.MAX_OUTPUT_TOKENS,
             'response_format': {'type': 'json_object'}
         }
 
@@ -230,10 +213,12 @@ class MultiModelPool:
             raise ValueError('Model attempted to change the authenticated scope')
 
         usage = body.get('usage', {})
-        prompt_tokens = usage.get('prompt_tokens', upper_input // 4)
-        completion_tokens = usage.get('completion_tokens', len(raw_content) // 4)
+        prompt_tokens = usage.get('prompt_tokens')
+        completion_tokens = usage.get('completion_tokens')
+        if any(type(n) is not int or n < 0 for n in (prompt_tokens, completion_tokens)):
+            raise ValueError('Valid provider usage accounting is required')
 
-        if prompt_tokens > upper_input or completion_tokens > 1000:
+        if prompt_tokens > upper_input or completion_tokens > self.MAX_OUTPUT_TOKENS:
             raise ValueError('Provider exceeded the reserved token contract')
 
         actual_cost = (prompt_tokens * provider.input_usd_per_million + completion_tokens * provider.output_usd_per_million) / 1_000_000

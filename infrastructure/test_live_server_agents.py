@@ -60,8 +60,10 @@ def run_test():
     ops_agent = next(a for a in agents if a['kind'] == 'operations')
     print(f"  [PASS] Live Agents found: Support Agent ({support_agent['id']}), Operations Agent ({ops_agent['id']})")
 
-    # 6. Test Live Customer Support Agent Run
-    print("\n--- Testing Live Customer Support Agent Run ---")
+    # 6. Test DPDP Consent Security Gate (Negative Test: dispatch without consent must fail)
+    print("\n--- Testing DPDP Consent Enforcement ---")
+    # Clean any prior consent state to ensure clean negative test
+    client.post('/api/privacy/consent/withdraw', json={'data_principal_id': 'CUS-001'}, headers={'X-CSRF-Token': csrf_token})
     support_payload = {
         'agent_id': support_agent['id'],
         'objective': 'Customer Emma reports duplicate payment on order ORD-1001. Please review and refund.',
@@ -69,6 +71,22 @@ def run_test():
         'customer_id': 'CUS-001',
         'order_id': 'ORD-1001'
     }
+    unauthorized_resp = client.post('/api/runs', json=support_payload, headers={'X-CSRF-Token': csrf_token})
+    assert unauthorized_resp.status_code == 409, f"Expected 409 without consent, got {unauthorized_resp.status_code}"
+    assert "Active purpose consent is required" in unauthorized_resp.text
+    print("  [PASS] Dispatch correctly blocked without active consent (HTTP 409)")
+
+    # Record verified consent with operator attestation & evidence reference
+    grant_resp = client.post('/api/privacy/consent', json={
+        'data_principal_id': 'CUS-001',
+        'purpose': 'support.order_resolution',
+        'metadata': {'evidence_reference': 'Ticket TKT-001 customer consent form', 'operator_attestation': True}
+    }, headers={'X-CSRF-Token': csrf_token})
+    assert grant_resp.status_code == 200, f"Consent grant failed: {grant_resp.text}"
+    print("  [PASS] Consent recorded for CUS-001 (support.order_resolution)")
+
+    # 7. Test Live Customer Support Agent Run
+    print("\n--- Testing Live Customer Support Agent Run ---")
     run_resp = client.post('/api/runs', json=support_payload, headers={'X-CSRF-Token': csrf_token})
     assert run_resp.status_code == 202, f"Support run dispatch failed: {run_resp.text}"
     support_run_id = run_resp.json()['id']
@@ -88,8 +106,16 @@ def run_test():
 
     assert support_done, "Support agent run did not finish in time"
 
-    # 7. Test Live Operations Agent Run
+    # 8. Test Live Operations Agent Run
     print("\n--- Testing Live Operations Agent Run ---")
+    # Record consent for scoped simulation customers for operations.fulfillment
+    for i in range(1, 13):
+        client.post('/api/privacy/consent', json={
+            'data_principal_id': f'CUS-{i:03}',
+            'purpose': 'operations.fulfillment',
+            'metadata': {'evidence_reference': f'Batch demo consent CUS-{i:03}', 'operator_attestation': True}
+        }, headers={'X-CSRF-Token': csrf_token})
+
     ops_payload = {
         'agent_id': ops_agent['id'],
         'objective': 'Execute daily operations check across payment retries, shipment alerts, and inventory shortage replenishments.',
@@ -114,8 +140,29 @@ def run_test():
 
     assert ops_done, "Operations agent run did not finish in time"
 
+    # 9. Test DSAR & Consent Withdrawal
+    print("\n--- Testing DSAR & Consent Withdrawal ---")
+    dsar_resp = client.post('/api/privacy/dsar', json={'data_principal_id': 'CUS-001'}, headers={'X-CSRF-Token': csrf_token})
+    assert dsar_resp.status_code == 200
+    dsar_data = dsar_resp.json()
+    print(f"  [PASS] DSAR export verified: Records count={dsar_data.get('sim_records_count')}, Consents={len(dsar_data.get('consents', []))}")
+
+    withdraw_resp = client.post('/api/privacy/consent/withdraw', json={'data_principal_id': 'CUS-001', 'purpose': 'support.order_resolution'}, headers={'X-CSRF-Token': csrf_token})
+    assert withdraw_resp.status_code == 200
+    print("  [PASS] Consent successfully withdrawn for CUS-001")
+
+    withdrawn_dispatch = client.post('/api/runs', json={
+        'agent_id': support_agent['id'],
+        'objective': 'Customer Emma reports duplicate payment.',
+        'request_key': str(uuid.uuid4()),
+        'customer_id': 'CUS-001',
+        'order_id': 'ORD-1001'
+    }, headers={'X-CSRF-Token': csrf_token})
+    assert withdrawn_dispatch.status_code == 409
+    print("  [PASS] New run dispatch correctly rejected after withdrawal (HTTP 409)")
+
     print("\n" + "=" * 70)
-    print(" [ALL LIVE SERVER & AGENT TESTS PASSED SUCCESSFULLY!]")
+    print(" [ALL LIVE SERVER, AGENT & PRIVACY TESTS PASSED SUCCESSFULLY!]")
     print(" The live Docker container stack is fully operational on HTTPS.")
     print("=" * 70)
 

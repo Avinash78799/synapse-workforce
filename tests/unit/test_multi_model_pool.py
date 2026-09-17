@@ -9,6 +9,16 @@ from core.config import settings
 from core.models.pool import MultiModelPool, ProviderNode
 from core.models.providers import get_model
 
+# Explicit test price schedule; not a production price claim.
+settings = replace(settings, groq_input_usd_per_million=1, groq_output_usd_per_million=2, google_input_usd_per_million=1, google_output_usd_per_million=2, openrouter_input_usd_per_million=0, openrouter_output_usd_per_million=0)
+
+
+@pytest.fixture(autouse=True)
+def isolated_cooldowns():
+    MultiModelPool._cooldowns.clear()
+    yield
+    MultiModelPool._cooldowns.clear()
+
 
 def test_multi_model_pool_priority_fastest_first(monkeypatch):
     monkeypatch.setattr('core.models.pool.settings', replace(settings,

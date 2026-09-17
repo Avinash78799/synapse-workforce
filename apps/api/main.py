@@ -545,14 +545,14 @@ def budgets(user=Depends(current_user)):
 
 class ConsentInput(Body):
     data_principal_id: str = Field(min_length=1, max_length=100)
-    purpose: str = Field(min_length=1, max_length=100)
+    purpose: Literal['support.order_resolution', 'operations.fulfillment', 'security.audit']
     notice_version: str = '1.0'
     metadata: dict = Field(default_factory=dict)
 
 
 class ConsentWithdrawInput(Body):
     data_principal_id: str = Field(min_length=1, max_length=100)
-    purpose: str | None = None
+    purpose: Literal['support.order_resolution', 'operations.fulfillment', 'security.audit'] | None = None
 
 
 class PrincipalInput(Body):
@@ -578,7 +578,7 @@ def privacy_notice():
     """Statutory notice under Section 5 of the Digital Personal Data Protection Act, 2023."""
     return {
         'statutory_act': 'Digital Personal Data Protection Act, 2023 (India)',
-        'section_compliance': 'Section 5 (Notice) and Section 6 (Consent)',
+        'implementation_status': 'Privacy controls; jurisdiction-specific review required',
         'data_fiduciary': 'AI Agent Workforce Platform',
         'specified_purposes': [
             {'purpose': 'support.order_resolution', 'description': 'Investigate duplicate transactions, manage tickets, and issue authorized customer refunds'},
@@ -603,7 +603,10 @@ def privacy_notice():
 
 @app.post('/api/privacy/consent')
 def consent_grant(body: ConsentInput, user=Depends(current_user)):
+    require(user, 'owner', 'operator')
     """Records affirmative, purpose-specific consent from a Data Principal."""
+    if body.metadata.get('operator_attestation') is not True or len(str(body.metadata.get('evidence_reference','')).strip()) < 3:
+        raise HTTPException(422,'Verified consent evidence reference and operator attestation are required')
     from core.privacy.consent import record_consent
     with scoped(user['tenant_id']) as conn:
         record = record_consent(conn, user['tenant_id'], body.data_principal_id, body.purpose, body.notice_version, body.metadata)
@@ -614,6 +617,7 @@ def consent_grant(body: ConsentInput, user=Depends(current_user)):
 
 @app.post('/api/privacy/consent/withdraw')
 def consent_withdraw(body: ConsentWithdrawInput, user=Depends(current_user)):
+    require(user, 'owner', 'operator')
     """Withdraws consent per Section 6(4) of the DPDP Act."""
     from core.privacy.consent import withdraw_consent
     with scoped(user['tenant_id']) as conn:
@@ -625,6 +629,7 @@ def consent_withdraw(body: ConsentWithdrawInput, user=Depends(current_user)):
 
 @app.get('/api/privacy/consent/{principal_id}')
 def consent_list(principal_id: str, user=Depends(current_user)):
+    require(user, 'owner', 'operator')
     """Lists current consents for a Data Principal."""
     from core.privacy.consent import list_consents
     with scoped(user['tenant_id']) as conn:
@@ -634,6 +639,7 @@ def consent_list(principal_id: str, user=Depends(current_user)):
 
 @app.post('/api/privacy/dsar')
 def dsar_export(body: PrincipalInput, user=Depends(current_user)):
+    require(user, 'owner', 'operator')
     """Exports Data Principal summary per Section 11 of the DPDP Act."""
     from core.privacy.rights import export_data_principal_summary
     rate_limit('privacy-dsar:'+str(user['id']), 10, 60)
@@ -648,16 +654,20 @@ def dsar_export(body: PrincipalInput, user=Depends(current_user)):
 def privacy_erase(body: PrincipalInput, user=Depends(current_user)):
     """Executes Right to Erasure / Right to be Forgotten per Section 12(3) of DPDP Act."""
     require(user, 'owner', 'operator')
-    from core.privacy.rights import execute_erasure
+    from core.privacy.rights import execute_erasure, PrivacyConflict
     with scoped(user['tenant_id']) as conn:
-        result = execute_erasure(conn, user['tenant_id'], body.data_principal_id)
-        audit(conn, user['tenant_id'], None, 'privacy.erasure_executed', 'completed', actor=user['id'],
+        try:
+            result = execute_erasure(conn, user['tenant_id'], body.data_principal_id)
+        except PrivacyConflict as exc:
+            raise HTTPException(409,str(exc)) from None
+        audit(conn, user['tenant_id'], None, 'privacy.erasure_executed', result['status'], actor=user['id'],
               details={'data_principal_id': body.data_principal_id, 'anonymized_reference': result.get('anonymized_reference')})
     return result
 
 
 @app.post('/api/privacy/grievance')
 def file_grievance(body: GrievanceInput, user=Depends(current_user)):
+    require(user, 'owner', 'operator')
     """Registers a formal Data Principal privacy grievance under Section 13."""
     grievance_id = uuid4()
     with scoped(user['tenant_id']) as conn:

@@ -7,6 +7,7 @@ from core.policies.engine import PolicyRules
 from core.runtime.audit import audit
 from core.runtime.executor import execute_task, digest
 from core.memory.knowledge import retrieve
+from core.privacy.consent import workflow_consent
 from agents.operations.workflow import build_actions as operations_actions
 from agents.support.workflow import build_actions as support_actions
 
@@ -22,6 +23,8 @@ def create_run(conn, user, agent, objective, request_key, inputs):
     existing = conn.execute('SELECT * FROM agent_runs WHERE agent_id=%s AND request_key=%s',(agent['id'],request_key)).fetchone()
     if existing:
         return existing
+    if not workflow_consent(conn, user['tenant_id'], agent['kind'], inputs):
+        raise ValueError('Active purpose consent is required for this workflow')
     if agent['status']!='active':
         raise ValueError('Activate this agent before starting a run')
     # Serialize API requests for the same agent, including independently generated request keys.
@@ -91,7 +94,10 @@ def _process(tenant, agent_id, run_id):
             conn.execute('UPDATE agent_runs SET model_attempts=model_attempts+1 WHERE id=%s',(run_id,))
     if not run['plan']:
         try:
-            model = get_model().understand(agent['kind'],run['objective'],str(tenant),run['input'].get('order_id'))
+            with scoped(tenant,agent_id) as consent_conn:
+                if not workflow_consent(consent_conn, tenant, agent['kind'], run['input']):
+                    raise PermissionError('Purpose consent is missing or withdrawn')
+                model = get_model().understand(agent['kind'],run['objective'],str(tenant),run['input'].get('order_id'))
             expected = 'daily_operations' if agent['kind']=='operations' else 'resolve_ticket'
             if model.suggestion.intent!=expected:
                 raise ValueError('This objective is outside the selected agent workflow')
@@ -103,6 +109,9 @@ def _process(tenant, agent_id, run_id):
                 audit(conn,tenant,agent_id,'model.failed','failed',run=run_id,policy=run['policy_version'])
             return
         with scoped(tenant,agent_id) as conn:
+            if not workflow_consent(conn, tenant, agent['kind'], run['input']):
+                conn.execute("UPDATE agent_runs SET status='failed',error='Consent withdrawn before planning',finished_at=now() WHERE id=%s",(run_id,))
+                return
             knowledge = retrieve(conn,tenant,agent_id,model.suggestion.vector_search_query)
             plan = {'intent':model.suggestion.intent,'summary':model.suggestion.summary,'prompt_version':'1.0',
                     'metadata':model.suggestion.model_dump(mode='json'),'expanded':False,'knowledge_references':[str(k['document_id']) for k in knowledge],

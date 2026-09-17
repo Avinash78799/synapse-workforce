@@ -56,7 +56,9 @@ class ChatCompletionsProvider:
             raise RuntimeError('Live model requires an HTTP(S) endpoint and an explicit model')
         input_price = settings.input_usd_per_million if settings.input_usd_per_million > 0 else 2.50
         output_price = settings.output_usd_per_million if settings.output_usd_per_million > 0 else 10.00
-        budget = settings.daily_model_budget_usd if settings.daily_model_budget_usd > 0 else 5.0
+        budget = settings.daily_model_budget_usd
+        if not math.isfinite(budget) or budget <= 0:
+            raise RuntimeError('Positive model budget required')
         system = METADATA_EXTRACTOR+'\nSERVER ENVELOPE:\n'+json.dumps({'tenant_id':str(tenant_id),'agent_scope':kind,'target_entity_id':entity_id})
         sanitized_objective = redact_pii(objective)
         objective = sanitized_objective.encode()[:2500].decode(errors='ignore')
@@ -141,25 +143,27 @@ class ExternalEmbeddingProvider:
         self.api_key = api_key or settings.llm_api_key
 
     def embed(self, text: str) -> list[float]:
-        if not self.base_url:
-            return SimulationEmbeddings().embed(text)
-        headers = {}
-        if self.api_key:
-            headers['Authorization'] = f'Bearer {self.api_key}'
+        if not self.base_url or not self.api_key or not settings.embedding_model:
+            raise RuntimeError('External embeddings require an endpoint, explicit model and key')
         try:
-            resp = httpx.post(f'{self.base_url}/embeddings', headers=headers,
-                              json={'input': text[:8000], 'model': self.model}, timeout=15)
+            resp = httpx.post(f'{self.base_url}/embeddings', headers={'Authorization': f'Bearer {self.api_key}'},
+                              json={'input': redact_pii(text)[:8000], 'model': self.model, 'dimensions': 64}, timeout=15)
             resp.raise_for_status()
-            data = resp.json()
-            return data['data'][0]['embedding']
+            vector = resp.json()['data'][0]['embedding']
+            if not isinstance(vector, list) or len(vector) != 64 or any(
+                    type(v) not in (int, float) or not math.isfinite(v) for v in vector) or not any(vector):
+                raise ValueError('Embedding must contain 64 finite values and have nonzero norm')
+            return vector
         except Exception:
-            return SimulationEmbeddings().embed(text)
+            raise RuntimeError('External embedding failed or does not match the 64-dimensional index; no fallback used') from None
 
 
 def get_embedding_provider():
     if settings.embedding_provider in ('external', 'astra', 'openai'):
         return ExternalEmbeddingProvider()
-    return SimulationEmbeddings()
+    if settings.embedding_provider == 'simulation':
+        return SimulationEmbeddings()
+    raise RuntimeError('Unknown embedding provider')
 
 
 class VoiceProvider(Protocol):

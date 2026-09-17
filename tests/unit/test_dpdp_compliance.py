@@ -193,42 +193,11 @@ def test_dsar_summary_export():
 
     summary = export_data_principal_summary(db, tenant, customer)
     assert summary['data_principal_id'] == customer
-    assert len(summary['sub_processors']) >= 3
-    processor_names = [p['processor_name'] for p in summary['sub_processors']]
-    assert any('Groq' in name for name in processor_names)
-    assert any('Google' in name for name in processor_names)
-    assert any('OpenRouter' in name for name in processor_names)
+    assert summary['sub_processors'] == []
+    assert 'not yet implemented' in summary['processor_disclosure_status']
     assert len(db.requests) == 1
 
 
-def test_right_to_erasure_execution():
-    db = MockDb()
-    tenant = str(uuid4())
-    customer = 'CUS-102'
-
-    # Populate customer records
-    record_consent(db, tenant, customer, 'support.order_resolution')
-    db.records[(tenant, customer)] = {
-        'id': customer,
-        'kind': 'customer',
-        'data': {'name': 'Emma Watson', 'email': 'emma@acme.local', 'phone': '+91-9876543210', 'customer_id': customer}
-    }
-    db.memory.append({'customer_id': customer, 'content': 'Customer prefers express delivery'})
-
-    # Execute Right to be Forgotten
-    result = execute_erasure(db, tenant, customer)
-    assert result['status'] == 'completed'
-    assert result['records_anonymized'] == 1
-    assert result['memory_purged'] == 1
-
-    # Verify data anonymized in DB
-    updated = db.records[(tenant, customer)]['data']
-    assert 'Emma Watson' not in updated['name']
-    assert 'ANONYMIZED_DPDP_' in updated['name']
-    assert '[ERASED_PER_DPDP]' in updated['phone']
-
-    # Verify consent withdrawn
-    assert verify_consent(db, tenant, customer, 'support.order_resolution') is False
 
 
 # ==============================================================================

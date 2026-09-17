@@ -32,7 +32,10 @@ def resolve(conn,user,task_id,choice,reason):
         # appear to prove this action succeeded.
         conn.execute("SELECT set_config('app.agent_id',%s,true)",(str(task['agent_id']),))
         connector = get_connector(tool.name)
-        result=connector.reconcile(conn,tool.name,args,task['idempotency_key']) or receipt['result']
+        try:
+            result=connector.reconcile(conn,tool.name,args,task['idempotency_key'])
+        except RuntimeError:
+            raise HTTPException(409,'Provider unavailable; action remains frozen') from None
         if not result:
             raise HTTPException(409,'No conclusive provider evidence. Keep frozen or close unresolved; no retry was issued')
         if tool.name=='payment.refund' and any(result.get(k)!=args.get(k) for k in
@@ -40,7 +43,7 @@ def resolve(conn,user,task_id,choice,reason):
             raise HTTPException(409,'Refund evidence does not match this action')
         try:
             verified=connector.verify(conn,tool.name,result)
-        except (ValueError,KeyError):
+        except (ValueError,KeyError,RuntimeError):
             verified=False
         if not verified:
             raise HTTPException(409,'Provider state has not verified success; the action remains frozen')

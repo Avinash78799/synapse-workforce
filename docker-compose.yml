@@ -4,8 +4,8 @@ x-runtime: &runtime
   DATABASE_URL: postgresql://wf_app:${APP_DB_PASSWORD:?Run configure_local.py}@postgres:5432/workforce
   AUTH_DATABASE_URL: postgresql://wf_auth:${AUTH_DB_PASSWORD:?Run configure_local.py}@postgres:5432/workforce
   REDIS_URL: redis://redis:6379/0
-  WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
-  SECURE_COOKIES: ${SECURE_COOKIES:-false}
+  WEB_ORIGIN: ${WEB_ORIGIN:-https://localhost}
+  SECURE_COOKIES: ${SECURE_COOKIES:-true}
   MODEL_PROVIDER: ${MODEL_PROVIDER:-simulation}
   LLM_BASE_URL: ${LLM_BASE_URL:-}
   LLM_MODEL: ${LLM_MODEL:-}
@@ -22,6 +22,12 @@ x-runtime: &runtime
   OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
   OPENROUTER_MODEL: ${OPENROUTER_MODEL:-nvidia/nemotron-3-super-120b-a12b:free}
   OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+  GROQ_INPUT_USD_PER_MILLION: ${GROQ_INPUT_USD_PER_MILLION:--1}
+  GROQ_OUTPUT_USD_PER_MILLION: ${GROQ_OUTPUT_USD_PER_MILLION:--1}
+  GOOGLE_INPUT_USD_PER_MILLION: ${GOOGLE_INPUT_USD_PER_MILLION:--1}
+  GOOGLE_OUTPUT_USD_PER_MILLION: ${GOOGLE_OUTPUT_USD_PER_MILLION:--1}
+  OPENROUTER_INPUT_USD_PER_MILLION: ${OPENROUTER_INPUT_USD_PER_MILLION:--1}
+  OPENROUTER_OUTPUT_USD_PER_MILLION: ${OPENROUTER_OUTPUT_USD_PER_MILLION:--1}
   MODEL_COOLDOWN_SECONDS: ${MODEL_COOLDOWN_SECONDS:-60}
   COMMERCE_CONNECTOR: ${COMMERCE_CONNECTOR:-simulation}
   PAYMENT_CONNECTOR: ${PAYMENT_CONNECTOR:-simulation}
@@ -120,6 +126,7 @@ services:
       - ./.secrets/certs:/etc/ssl/certs:ro
     depends_on:
       api: {condition: service_healthy}
+      web: {condition: service_started}
 
   vault:
     image: hashicorp/vault:1.20

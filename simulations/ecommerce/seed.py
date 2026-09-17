@@ -3,12 +3,14 @@ import os
 from datetime import datetime, timezone, timedelta
 from uuid import UUID, uuid5, NAMESPACE_DNS
 import psycopg
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from core.security.passwords import hash_password
 from core.policies.engine import PolicyRules
 from core.tools.registry import tool_catalog
 from core.memory.knowledge import ingest
 from simulations.ecommerce.store import put
+from core.privacy.consent import record_consent, PURPOSES
 
 TENANT = UUID('11111111-1111-4111-8111-111111111111')
 OTHER_TENANT = UUID('22222222-2222-4222-8222-222222222222')
@@ -22,7 +24,7 @@ def seed():
     password = os.environ.get('SEED_PASSWORD')
     if not password or len(password)<12:
         raise RuntimeError('Set SEED_PASSWORD to at least 12 characters')
-    with psycopg.connect(os.environ['MIGRATION_DATABASE_URL']) as conn:
+    with psycopg.connect(os.environ['MIGRATION_DATABASE_URL'], row_factory=dict_row) as conn:
         for tenant,name in [(TENANT,'Acme Commerce'),(OTHER_TENANT,'Northstar Demo')]:
             if conn.execute('SELECT 1 FROM tenants WHERE id=%s',(tenant,)).fetchone():
                 print(f'{name}: already seeded; left unchanged')
@@ -58,6 +60,8 @@ def seed():
                                  (identity(str(agent)+integration),tenant,agent,integration,status))
                 for i in range(1,13):
                     cid,oid,pid = f'CUS-{i:03}',f'ORD-{1000+i}',f'PAY-{i:03}'
+                    # Fictional demo data only; never infer consent for existing/live customers.
+                    record_consent(conn, tenant, cid, PURPOSES[kind], metadata={'source':'fictional_simulation_seed'})
                     amount = 7_500_000 if i==2 else 240_000 if i==1 else 150_000
                     history=[{'category':'duplicate_charge','created_at':(datetime.now(timezone.utc)-timedelta(days=day)).isoformat()} for day in [4,9,15]] if i==3 else []
                     put(conn,tenant,agent,'customer',cid,{'name':['Aarav Mehta','Emma Wilson','Riya Kapoor','James Carter'][((i-1)%4)],'email':f'customer{i}@example.test','refund_claim_history':history})
@@ -81,3 +85,4 @@ def seed():
 
 if __name__=='__main__':
     seed()
+

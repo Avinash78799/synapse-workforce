@@ -21,9 +21,9 @@ def get_connector(tool_name: str = '') -> BaseConnector:
     # Tool-specific connector routing
     if tool_name.startswith('payment.') and settings.payment_connector != 'simulation':
         name = settings.payment_connector
-    elif tool_name.startswith('ticket.') and settings.helpdesk_connector != 'simulation':
+    elif tool_name.startswith(('ticket.', 'support.notify')) and settings.helpdesk_connector != 'simulation':
         name = settings.helpdesk_connector
-    elif (tool_name.startswith('operations.') or tool_name.startswith('shipment.') or tool_name.startswith('task.')) and settings.commerce_connector != 'simulation':
+    elif (tool_name.startswith(('operations.', 'support.investigate')) or tool_name.startswith('shipment.') or tool_name.startswith('task.')) and settings.commerce_connector != 'simulation':
         name = settings.commerce_connector
     elif settings.external_connector_base_url:
         name = 'http'
@@ -34,6 +34,6 @@ def get_connector(tool_name: str = '') -> BaseConnector:
         if name in ('http', 'external', 'sandbox'):
             _CONNECTORS[name] = HttpConnector()
         else:
-            _CONNECTORS[name] = _CONNECTORS['simulation']
+            raise RuntimeError('Unknown business connector; refusing simulation fallback')
 
     return _CONNECTORS[name]

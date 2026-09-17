@@ -14,6 +14,7 @@ from core.policies.engine import PolicyRules, evaluate
 from core.runtime.audit import audit
 from core.tools.registry import TOOLS
 from core.connectors import get_connector
+from core.privacy.consent import workflow_consent
 
 
 def digest(value):
@@ -59,6 +60,11 @@ def execute_task(tenant, agent_id, task_id):
             required_skills=['InventorySkill']
         dependencies_enabled=all((conn.execute('SELECT enabled FROM agent_skills WHERE name=%s',(s,)).fetchone() or {}).get('enabled',False) for s in required_skills)
         allowed = bool(permission and permission['allowed'] and enabled and enabled['enabled'])
+        consent_granted = workflow_consent(conn, tenant, agent['kind'], run['input'])
+        if not consent_granted:
+            conn.execute("UPDATE agent_tasks SET status='denied',decision='deny',reason='Purpose consent missing or withdrawn',finished_at=now() WHERE id=%s", (task_id,))
+            audit(conn,tenant,agent_id,'tool.consent','denied',run=run['id'],task=task_id,tool=tool.name,policy=task['policy_version'])
+            return {**task,'status':'denied'}
         # Abuse protection cannot be disabled to enable automatic refunds.
         if tool.name == 'payment.refund':
             abuse = conn.execute("SELECT enabled FROM agent_skills WHERE name='AbuseSignalSkill'").fetchone()
@@ -73,7 +79,7 @@ def execute_task(tenant, agent_id, task_id):
             if row and row['autonomy_cap'] is not None:
                 caps.append(row['autonomy_cap'])
         decision = evaluate(tool.name,args,rules,allowed=allowed,
-                            skill_enabled=bool(skill and skill['enabled'] and dependencies_enabled),autonomy=min(caps),mutates=tool.mutates)
+                            skill_enabled=bool(skill and skill['enabled'] and dependencies_enabled),autonomy=min(caps),mutates=tool.mutates,consent_granted=consent_granted)
         approval_id = task['approval_id']
         if not receipt:
             if decision.outcome == 'require_approval':
@@ -126,6 +132,8 @@ def execute_task(tenant, agent_id, task_id):
                 conn.execute("UPDATE agent_runs SET status='aborted' WHERE id=%s",(run['id'],))
                 return {**task,'status':'paused'}
             previous = conn.execute('SELECT * FROM tool_receipts WHERE idempotency_key=%s FOR UPDATE',(task['idempotency_key'],)).fetchone()
+            if not workflow_consent(conn, tenant, agent['kind'], run['input']):
+                raise PermissionError('Consent withdrawn before dispatch')
             connector = get_connector(tool.name)
             if previous['state']=='confirmed':
                 result = previous['result']
@@ -137,6 +145,8 @@ def execute_task(tenant, agent_id, task_id):
                              (Jsonb(result),task['idempotency_key']))
         with scoped(tenant,agent_id) as conn:
             verified = get_connector(tool.name).verify(conn,tool.name,result)
+            if not verified and tool.mutates:
+                raise RuntimeError('Mutation has not been authoritatively verified')
             status = 'completed' if verified else 'failed'
             conn.execute('UPDATE agent_tasks SET status=%s,verification=%s,result=%s,finished_at=now() WHERE id=%s',
                          (status,'passed' if verified else 'failed',Jsonb(result),task_id))
@@ -149,4 +159,12 @@ def execute_task(tenant, agent_id, task_id):
             conn.execute("UPDATE tool_receipts SET state='failed',updated_at=now() WHERE idempotency_key=%s",(task['idempotency_key'],))
             audit(conn,tenant,agent_id,'tool.failed','failed',run=run['id'],task=task_id,tool=tool.name,
                   policy=task['policy_version'],details={'reason':str(exc)})
+        return {**task,'status':'failed'}
+
+    except Exception:
+        with scoped(tenant,agent_id) as conn:
+            conn.execute("UPDATE tool_receipts SET state='unknown',updated_at=now() WHERE idempotency_key=%s",(task['idempotency_key'],))
+            conn.execute("UPDATE agent_tasks SET status='failed',verification='unknown',reason='Provider outcome uncertain; reconciliation required',finished_at=now() WHERE id=%s",(task_id,))
+            audit(conn,tenant,agent_id,'reconciliation.required','unknown',run=run['id'],task=task_id,
+                  tool=tool.name,policy=task['policy_version'])
         return {**task,'status':'failed'}

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -30,8 +31,10 @@ def main():
         name='workforce-gate-'+uuid4().hex[:10]
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-        base=f'http://localhost:{port}'
-        env={**os.environ,'WEB_PORT':str(port),'WEB_ORIGIN':base}
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1',0));http_port=sock.getsockname()[1]
+        base=f'https://localhost:{port}'
+        env={**os.environ,'HTTPS_PORT':str(port),'HTTP_PORT':str(http_port),'WEB_ORIGIN':base,'SECURE_COOKIES':'true','MODEL_PROVIDER':'simulation'}
         def command(args,timeout=900):
             return subprocess.run(args,cwd=work,env=env,check=True,timeout=timeout,stdout=log,stderr=log)
         def compose(project,file,*args):
@@ -41,17 +44,32 @@ def main():
                 command(compose(name+'-tests','docker-compose.test.yml','up','--build','--abort-on-container-exit','--exit-code-from','tests'))
                 report['native_tests_passed']=True
                 command([sys.executable,'infrastructure/configure_local.py'])
+                # Redirect the private test port to its private HTTPS port only.
+                nginx=work/'infrastructure/nginx/nginx.conf'
+                nginx.write_text(nginx.read_text().replace('https://$host$request_uri',f'https://$host:{port}$request_uri'))
                 started=time.monotonic()
                 command(compose(name,'docker-compose.yml','up','--build','-d','--wait'),timeout=1200)
                 report['cold_start_seconds']=round(time.monotonic()-started,2)
                 jar=http.cookiejar.CookieJar()
-                http=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+                tls=ssl.create_default_context(cafile=str(work/'.secrets/certs/cert.pem'))
+                http_client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar),urllib.request.HTTPSHandler(context=tls))
                 def request(path,body=None,csrf=None):
                     headers={'Content-Type':'application/json'}
                     if csrf:headers['X-CSRF-Token']=csrf
                     req=urllib.request.Request(base+'/api'+path,data=json.dumps(body).encode() if body is not None else None,headers=headers)
-                    with http.open(req,timeout=10) as response:return json.load(response)
-                assert request('/health')['status']=='ok'
+                    with http_client.open(req,timeout=10) as response:return json.load(response)
+                # Compose has no web healthcheck: wait for the full proxy route.
+                deadline=time.monotonic()+60
+                while True:
+                    try:
+                        assert request('/health')['status']=='ok'
+                        break
+                    except Exception:
+                        if time.monotonic()>=deadline: raise
+                        time.sleep(.5)
+                with http_client.open(f'http://localhost:{http_port}/api/health',timeout=10) as response:
+                    assert response.url==base+'/api/health'
+                report['https_and_redirect_verified']=True
                 config=dict(line.split('=',1) for line in (work/'.env').read_text().splitlines() if '=' in line)
                 user=request('/auth/login',{'email':'owner@acme.local','password':config['SEED_PASSWORD']})
                 agents=request('/dashboard')['agents']
