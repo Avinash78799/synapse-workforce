@@ -1,0 +1,37 @@
+'use client';
+import {useCallback,useEffect,useState,type FormEvent} from 'react';
+
+type Api=(path:string,method?:string,body?:unknown)=>Promise<any>;
+type Endpoint={id:string;agent_id:string;name:string;path:string;revoked_at:string|null;needs_rotation:boolean};
+type Event={event_id:string;event_type:string;outcome:string;reason_code:string|null;run_id:string|null;attempts:number;last_received_at:string};
+type Agent={id:string;name:string;kind:string};
+const message=(error:unknown)=>error instanceof Error?error.message:'Request failed';
+
+export function WebhookPanel({api,role,openRun}:{api:Api;role:string;openRun:(id:string)=>void}){
+ const [endpoints,setEndpoints]=useState<Endpoint[]>([]),[agents,setAgents]=useState<Agent[]>([]);
+ const [configured,setConfigured]=useState(false),[sandbox,setSandbox]=useState(false),[loaded,setLoaded]=useState(false);
+ const [name,setName]=useState('Website events'),[agentId,setAgentId]=useState('');
+ const [secret,setSecret]=useState(''),[newPath,setNewPath]=useState(''),[selected,setSelected]=useState(''),[events,setEvents]=useState<Event[]>([]);
+ const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const owner=role==='owner';
+ const load=useCallback(async()=>{
+  const [data,workspace]=await Promise.all([api('/workspace/webhooks'),api('/workspace')]);
+  setEndpoints(data.endpoints);setConfigured(data.signing_configured);setSandbox(Boolean(workspace.profile));setAgents(workspace.agents);setLoaded(true);
+ },[api]);
+ useEffect(()=>{setSecret('');load().catch(e=>setError(message(e)))},[load]);
+ useEffect(()=>{setEvents([]);if(!selected)return;let active=true;api('/workspace/webhooks/'+selected+'/events').then(rows=>{if(active)setEvents(rows)}).catch(e=>{if(active)setError(message(e))});return()=>{active=false}},[api,selected]);
+ const act=async(fn:()=>Promise<void>)=>{setBusy(true);setError('');setNotice('');try{await fn();await load()}catch(e){setError(message(e))}finally{setBusy(false)}};
+ const reveal=(result:{secret:string;path:string})=>{setSecret(result.secret);setNewPath(result.path)};
+ const create=(e:FormEvent)=>{e.preventDefault();void act(async()=>reveal(await api('/workspace/webhooks','POST',{name,agent_id:agentId})))};
+ return <div className="client-area">
+  {error&&<p role="alert" className="banner error">{error}</p>}{notice&&<p role="status" className="banner success">{notice}</p>}
+  <section className="panel"><div className="eyebrow">INCOMING EVENTS · SANDBOX</div><h2>Start work from your backend</h2><p>Send a signed business event to an endpoint bound to one agent. Accepted events create queued runs; the usual permissions, consent and approval checks still apply.</p><p>This custom-backend protocol uses fictional sandbox records. Native Shopify and Zendesk webhook delivery has not been connected or verified.</p>
+  {loaded&&!configured&&<p role="status">Signing is not configured. Ask the platform operator to enable webhook signing before creating an endpoint.</p>}
+  {loaded&&!sandbox&&<p>Create a managed sandbox workspace to use incoming events.</p>}</section>
+  {secret&&<section className="panel secret-box"><h3>Copy the signing secret now</h3><p>Keep this on your backend. It will not be shown again. Rotation immediately replaces the previous secret.</p><label>Signing secret<textarea readOnly value={secret} rows={2}/></label><p>Endpoint path: <code>{newPath}</code></p><div className="filters"><button className="button secondary" onClick={()=>navigator.clipboard.writeText(secret).then(()=>setNotice('Signing secret copied.')).catch(()=>setNotice('Select and copy the secret manually.'))}>Copy secret</button><button className="button secondary" onClick={()=>setSecret('')}>Dismiss secret</button></div></section>}
+  {owner&&<section className="panel"><h3>Create an endpoint</h3><form className="client-form" onSubmit={create}><label>Name<input required minLength={2} maxLength={80} value={name} onChange={e=>setName(e.target.value)}/></label><label>Agent<select required value={agentId} onChange={e=>setAgentId(e.target.value)}><option value="">Choose an agent</option>{agents.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><button className="button primary" disabled={busy||!configured||!sandbox||!agentId}>Create endpoint</button></form></section>}
+  <section className="panel"><h3>Endpoints</h3>{!loaded?<p>Loading endpoints…</p>:!endpoints.length?<p>No endpoints yet.</p>:endpoints.map(endpoint=><div className="client-key" key={endpoint.id}><strong>{endpoint.name}</strong><p>{agents.find(a=>a.id===endpoint.agent_id)?.name} · {endpoint.revoked_at?'Revoked':endpoint.needs_rotation?'Signing key changed: rotation required':'Active'}</p><p><code>{endpoint.path}</code></p><div className="filters"><button className="button secondary" disabled={busy} onClick={()=>{setSelected(endpoint.id);setError('')}}>View events</button>{owner&&!endpoint.revoked_at&&<><button className="button secondary" disabled={busy||!configured} onClick={()=>act(async()=>{reveal(await api('/workspace/webhooks/'+endpoint.id+'/rotate','POST'));setNotice('Signing secret replaced. Update your backend sender.')})}>Rotate secret</button><button className="text-button" disabled={busy} onClick={()=>act(async()=>{await api('/workspace/webhooks/'+endpoint.id,'DELETE');setSecret('');setNotice('Future deliveries are blocked. Already accepted runs remain.')})}>Revoke endpoint</button></>}</div></div>)}</section>
+  {selected&&<section className="panel"><div className="panel-heading"><h3>Recent events: {endpoints.find(e=>e.id===selected)?.name}</h3><button className="button secondary" disabled={busy} onClick={()=>act(async()=>setEvents(await api('/workspace/webhooks/'+selected+'/events')))}>Refresh events</button></div><p>Latest outcome for each authenticated, schema-valid event; up to 100 events. Invalid signatures, malformed payloads and rate-limited attempts are excluded. Accepted means queued, not completed.</p>{events.length===0?<p>No recorded events.</p>:events.map(event=><div className="client-key" key={event.event_id}><strong>{event.event_type}</strong><p><code>{event.event_id}</code></p><p>{event.outcome} · {event.attempts} matching deliveries · {new Date(event.last_received_at).toLocaleString()}</p>{event.reason_code&&<p>{event.reason_code.replaceAll('_',' ')}</p>}{event.run_id&&<button className="text-button" onClick={()=>openRun(event.run_id!)}>Inspect agent run</button>}</div>)}</section>}
+  <section className="panel"><h3>Sender contract</h3><p>Send JSON to the endpoint with <code>X-Workforce-Timestamp</code> (Unix seconds) and <code>X-Workforce-Signature</code> (<code>v1=</code> plus the hex HMAC-SHA256 of <code>timestamp + "." + exact_body_bytes</code>, keyed by the signing secret).</p><p>Sign within five minutes of delivery. For a retry, keep the same event UUID and exact JSON bytes and sign with a fresh timestamp. A changed payload under the same event ID returns 409. Use no browser cookies or Origin header.</p><pre className="review-evidence">{JSON.stringify({event_id:'GENERATE-A-UUID',event_type:'support.duplicate_charge',customer_id:'CUS-001',order_id:'ORD-1001'},null,2)}</pre><p>Support endpoints require matching customer and order IDs. Operations endpoints accept <code>operations.review</code> with no customer or order fields. All three sandboxes must be connected before a new workflow can start.</p></section>
+ </div>
+}

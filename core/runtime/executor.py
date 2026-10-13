@@ -17,6 +17,15 @@ from core.connectors import get_connector
 from core.privacy.consent import workflow_consent
 
 
+def connector_for(conn, name):
+    from core.clients.catalog import profile, tool_category, require_connected
+    from core.connectors.simulation import SimulationConnector
+    if profile(conn):
+        require_connected(conn, tool_category(name))
+        return SimulationConnector()
+    return get_connector(name)
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
@@ -65,12 +74,17 @@ def execute_task(tenant, agent_id, task_id):
             conn.execute("UPDATE agent_tasks SET status='denied',decision='deny',reason='Purpose consent missing or withdrawn',finished_at=now() WHERE id=%s", (task_id,))
             audit(conn,tenant,agent_id,'tool.consent','denied',run=run['id'],task=task_id,tool=tool.name,policy=task['policy_version'])
             return {**task,'status':'denied'}
+        try:
+            connector_for(conn, tool.name)
+        except ValueError as exc:
+            conn.execute("UPDATE agent_tasks SET status='denied',reason=%s,finished_at=now() WHERE id=%s",(str(exc),task_id))
+            return {**task,'status':'denied'}
         # Abuse protection cannot be disabled to enable automatic refunds.
         if tool.name == 'payment.refund':
             abuse = conn.execute("SELECT enabled FROM agent_skills WHERE name='AbuseSignalSkill'").fetchone()
             allowed = allowed and bool(abuse and abuse['enabled'])
             # Fresh trusted evidence replaces any stale/model-supplied fraud signal.
-            evidence = get_connector(tool.name).investigate(conn,args,rules.abuse_window_days)
+            evidence = connector_for(conn, tool.name).investigate(conn,args,rules.abuse_window_days)
             args['claim_count'] = evidence['claim_count']
         caps = [agent['autonomy']]
         # Overrides can restrict an agent, never grant authority above it.
@@ -134,7 +148,7 @@ def execute_task(tenant, agent_id, task_id):
             previous = conn.execute('SELECT * FROM tool_receipts WHERE idempotency_key=%s FOR UPDATE',(task['idempotency_key'],)).fetchone()
             if not workflow_consent(conn, tenant, agent['kind'], run['input']):
                 raise PermissionError('Consent withdrawn before dispatch')
-            connector = get_connector(tool.name)
+            connector = connector_for(conn, tool.name)
             if previous['state']=='confirmed':
                 result = previous['result']
             else:
@@ -144,7 +158,7 @@ def execute_task(tenant, agent_id, task_id):
                 conn.execute("UPDATE tool_receipts SET state='confirmed',result=%s,updated_at=now() WHERE idempotency_key=%s",
                              (Jsonb(result),task['idempotency_key']))
         with scoped(tenant,agent_id) as conn:
-            verified = get_connector(tool.name).verify(conn,tool.name,result)
+            verified = connector_for(conn, tool.name).verify(conn,tool.name,result)
             if not verified and tool.mutates:
                 raise RuntimeError('Mutation has not been authoritatively verified')
             status = 'completed' if verified else 'failed'

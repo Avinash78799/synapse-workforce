@@ -101,7 +101,8 @@ def workflow_consent(conn, tenant_id, kind, inputs):
         return verify_consent(conn, tenant_id, principal, purpose)
     # The current Operations workflow inspects the entire scoped simulator.
     # A remote batch must provide a trusted principal manifest before it can run.
-    if settings.commerce_connector != 'simulation' or settings.external_connector_base_url:
+    from core.clients.catalog import profile
+    if not profile(conn) and (settings.commerce_connector != 'simulation' or settings.external_connector_base_url):
         return False
     customers = conn.execute("SELECT id FROM sim_records WHERE tenant_id=%s AND kind='customer'", (tenant_id,)).fetchall()
     return bool(customers) and all(verify_consent(conn, tenant_id, c['id'], purpose) for c in customers)

@@ -16,6 +16,8 @@ secret_dir.mkdir(exist_ok=True)
 secret_dir.chmod(0o700)
 from configure_audit import configure
 configure()
+from configure_webhooks import configure as configure_webhooks
+configure_webhooks()
 from generate_ssl_certs import generate_ssl_certificates
 generate_ssl_certificates()
 print('Local settings generated. The sign-in account is owner@acme.local.')

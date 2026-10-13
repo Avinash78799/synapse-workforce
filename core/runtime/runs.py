@@ -2,7 +2,8 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 from core.config import settings
 from core.db import pool, scoped
-from core.models.providers import get_model
+from core.models.providers import get_model, SimulationProvider
+from core.clients.catalog import profile, CATEGORIES, require_connected
 from core.policies.engine import PolicyRules
 from core.runtime.audit import audit
 from core.runtime.executor import execute_task, digest
@@ -23,6 +24,10 @@ def create_run(conn, user, agent, objective, request_key, inputs):
     existing = conn.execute('SELECT * FROM agent_runs WHERE agent_id=%s AND request_key=%s',(agent['id'],request_key)).fetchone()
     if existing:
         return existing
+    sandbox = bool(profile(conn))
+    if sandbox:
+        for category in CATEGORIES:
+            require_connected(conn, category)
     if not workflow_consent(conn, user['tenant_id'], agent['kind'], inputs):
         raise ValueError('Active purpose consent is required for this workflow')
     if agent['status']!='active':
@@ -42,7 +47,7 @@ def create_run(conn, user, agent, objective, request_key, inputs):
     conn.execute('''INSERT INTO agent_runs(id,tenant_id,agent_id,actor_id,objective,request_key,agent_version,policy_version,provider,model,input,execution_epoch)
         VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
         (run_id,user['tenant_id'],agent['id'],user['id'],objective,request_key,agent['version'],agent['policy_version'],
-         settings.model_provider,settings.llm_model or None,Jsonb(inputs),agent['execution_epoch']))
+         'simulation' if sandbox else settings.model_provider,None if sandbox else settings.llm_model or None,Jsonb(inputs),agent['execution_epoch']))
     conn.execute('INSERT INTO business_cases(tenant_id,agent_id,case_key,run_id) VALUES(%s,%s,%s,%s)',
                  (user['tenant_id'],agent['id'],case_key,run_id))
     enqueue(conn,user['tenant_id'],agent['id'],run_id)
@@ -97,7 +102,8 @@ def _process(tenant, agent_id, run_id):
             with scoped(tenant,agent_id) as consent_conn:
                 if not workflow_consent(consent_conn, tenant, agent['kind'], run['input']):
                     raise PermissionError('Purpose consent is missing or withdrawn')
-                model = get_model().understand(agent['kind'],run['objective'],str(tenant),run['input'].get('order_id'),model_tier=agent.get('model_tier'))
+                provider = SimulationProvider() if profile(consent_conn) else get_model()
+                model = provider.understand(agent['kind'],run['objective'],str(tenant),run['input'].get('order_id'),model_tier=agent.get('model_tier'))
             expected = 'daily_operations' if agent['kind']=='operations' else 'resolve_ticket'
             if model.suggestion.intent!=expected:
                 raise ValueError('This objective is outside the selected agent workflow')
@@ -121,7 +127,7 @@ def _process(tenant, agent_id, run_id):
             add_task(conn,run,0,'operations.inspect' if agent['kind']=='operations' else 'support.investigate',
                      {} if agent['kind']=='operations' else run['input'])
             audit(conn,tenant,agent_id,'plan.created','completed',run=run_id,policy=run['policy_version'],
-                  details={'intent':model.suggestion.intent,'provider':settings.model_provider})
+                  details={'intent':model.suggestion.intent,'provider':run['provider']})
     with scoped(tenant,agent_id) as conn:
         run = conn.execute('SELECT * FROM agent_runs WHERE id=%s',(run_id,)).fetchone()
         first = conn.execute('SELECT * FROM agent_tasks WHERE run_id=%s AND position=0',(run_id,)).fetchone()
@@ -134,7 +140,12 @@ def _process(tenant, agent_id, run_id):
             return
         with scoped(tenant,agent_id) as conn:
             rules = PolicyRules.model_validate(conn.execute('SELECT rules FROM agent_policies WHERE version=%s',(run['policy_version'],)).fetchone()['rules'])
-            actions = (operations_actions if agent['kind']=='operations' else support_actions)(first['result'],rules)
+            definition = conn.execute('SELECT definition FROM agent_versions WHERE version=%s',(run['agent_version'],)).fetchone()
+            if agent['kind']=='support' and definition and definition['definition'].get('demo_workflow')=='zendesk_ticket_triage':
+                from agents.support.triage_demo import build_actions as triage_actions
+                actions = triage_actions(first['result'],rules)
+            else:
+                actions = (operations_actions if agent['kind']=='operations' else support_actions)(first['result'],rules)
             if len(actions)+1>rules.max_actions_per_run:
                 conn.execute("UPDATE agent_runs SET status='failed',error='Plan exceeds action budget',finished_at=now() WHERE id=%s",(run_id,))
                 return

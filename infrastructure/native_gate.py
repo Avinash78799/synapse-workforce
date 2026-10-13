@@ -74,7 +74,7 @@ def main():
                 user=request('/auth/login',{'email':'owner@acme.local','password':config['SEED_PASSWORD']})
                 agents=request('/dashboard')['agents']
                 support=next(a for a in agents if a['kind']=='support')
-                run=request('/runs',{'agent_id':support['id'],'objective':'Resolve duplicate payment','request_key':str(uuid4()),'customer_id':'CUS-002','order_id':'ORD-1002'},user['csrf_token'])
+                run=request('/runs',{'agent_id':support['id'],'objective':'Triage a payment complaint for human review','request_key':str(uuid4()),'customer_id':'CUS-002','order_id':'ORD-1002'},user['csrf_token'])
                 def wait_status(expected):
                     until=time.monotonic()+60
                     while time.monotonic()<until:
@@ -87,19 +87,26 @@ def main():
                 approval=next(a for a in request('/approvals') if a['run_id']==run['id'])
                 finance=request('/auth/login',{'email':'finance_approver@acme.local','password':config['SEED_PASSWORD']})
                 request('/approvals/'+approval['id']+'/decision',{'decision':'approved','reason':'Independent native gate verification'},finance['csrf_token'])
-                detail=wait_status('completed')
+                detail=wait_status('escalated')
+                assert [t['tool'] for t in detail['tasks']]==['support.investigate','ticket.update']
                 assert all(t['verification']=='passed' for t in detail['tasks'])
                 assert request('/audit/export')['verification']['signed_events']>0
-                report.update(docker_boot_verified=True,real_worker_refund_verified=True)
+                report.update(docker_boot_verified=True,real_worker_triage_verified=True)
                 # Exercise a real Redis outage with durable, undispatched work.
                 command(compose(name,'docker-compose.yml','stop','worker'))
                 owner=request('/auth/login',{'email':'owner@acme.local','password':config['SEED_PASSWORD']})
                 run=request('/runs',{'agent_id':support['id'],'objective':'Resolve queued duplicate payment','request_key':str(uuid4()),'customer_id':'CUS-001','order_id':'ORD-1001'},owner['csrf_token'])
                 command(compose(name,'docker-compose.yml','stop','redis'))
                 command(compose(name,'docker-compose.yml','up','-d','--wait','redis','worker'))
-                detail=wait_status('completed')
+                wait_status('waiting_approval')
+                approval=next(a for a in request('/approvals') if a['run_id']==run['id'])
+                finance=request('/auth/login',{'email':'finance_approver@acme.local','password':config['SEED_PASSWORD']})
+                request('/approvals/'+approval['id']+'/decision',{'decision':'approved','reason':'Review after isolated Redis recovery'},finance['csrf_token'])
+                detail=wait_status('escalated')
                 refunds=[row for row in request('/simulation/'+support['id']) if row['kind']=='refund' and row['data']['order_id']=='ORD-1001']
-                assert len(refunds)==1
+                assert len(refunds)==0
+                assert [t['tool'] for t in detail['tasks']]==['support.investigate','ticket.update']
+                assert all(t['verification']=='passed' for t in detail['tasks'])
                 report.update(native_gate_passed=True,redis_outage_recovery_verified=True)
 
             except Exception as exc:

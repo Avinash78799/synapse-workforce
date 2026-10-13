@@ -37,12 +37,12 @@ class ModelResult:
 
 
 class LLMProvider(Protocol):
-    def understand(self, kind: str, objective: str, tenant_id: str, entity_id: str | None = None) -> ModelResult: ...
+    def understand(self, kind: str, objective: str, tenant_id: str, entity_id: str | None = None, model_tier: str | None = None) -> ModelResult: ...
 
 
 class SimulationProvider:
     """No LLM, no invented model scores. Reproducible workflow intent for V1 tests."""
-    def understand(self, kind, objective, tenant_id, entity_id=None):
+    def understand(self, kind, objective, tenant_id, entity_id=None, model_tier=None):
         intent = 'daily_operations' if kind == 'operations' else 'resolve_ticket'
         query='payments orders inventory shipments' if kind=='operations' else 'duplicate payment refund policy'
         return ModelResult(Suggestion(intent=intent, summary='Execute the configured simulation workflow.',
@@ -50,7 +50,7 @@ class SimulationProvider:
 
 
 class ChatCompletionsProvider:
-    def understand(self, kind, objective, tenant_id, entity_id=None):
+    def understand(self, kind, objective, tenant_id, entity_id=None, model_tier=None):
         base_url = settings.llm_base_url.strip()
         if not (base_url.startswith('https://') or base_url.startswith('http://')) or not settings.llm_model:
             raise RuntimeError('Live model requires an HTTP(S) endpoint and an explicit model')

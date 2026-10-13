@@ -2,9 +2,9 @@
 
 ## Proposed lead workflow
 
-Lead with **duplicate-charge investigation and policy-controlled refunds for ecommerce support teams**. This uses the strongest existing Support workflow. Keep Operations available in the demo; do not describe multiple industries or agents as a validated market.
+Lead with **founder-managed Zendesk support ticket triage for small ecommerce teams**. Start with one queue and a named human responsible for setup and review. The initial demonstration uses payment complaints only to show investigation, approval and escalation; it does not promise refunds or autonomous resolution. Trust Dashboard evidence and personal onboarding are the service proposition.
 
-The target commerce/helpdesk/payment stack is deliberately undecided. The choice changes OAuth scopes, refund semantics, webhooks, and onboarding. Confirm it with real customer interviews before building a connector. No interviews, outreach, willingness-to-pay findings, or pilot adoption have been recorded yet.
+Zendesk is the first engineering target. Customer demand, queue volume and willingness to pay remain hypotheses. No clients, interviews, paid pilots, testimonials or measured savings have been recorded. Live OAuth and controlled writes must pass their gates before a real pilot. Shopify, per-action automation settings and reversals do not move ahead of Gate 4.
 
 ## Interview plan
 
@@ -27,7 +27,7 @@ Record each interview's role, company type, systems, case volume, current steps,
 
 ## Measurement definitions
 
-- Case volume: count of eligible duplicate-charge complaints over the baseline period.
+- Case volume: count of eligible support-triage complaints over the baseline period.
 - Active handling time: human minutes spent investigating, deciding, and completing one case. Separate from elapsed waiting time.
 - Verified resolution rate: cases whose final provider state and ticket outcome were checked, divided by eligible cases.
 - Incorrect action rate: confirmed wrong entity, amount, currency, or unauthorized action divided by executed actions. Report counts as well as rates.
@@ -40,7 +40,7 @@ Collect a baseline before the pilot and use comparable cases afterward. No hours
 
 ## Pilot acceptance template
 
-Customer/stack: to be chosen.
+Customer: to be chosen. Initial stack: Zendesk, subject to discovery fit and live qualification.
 Design partners: target 1–3; none recruited through this build.
 Start mode: sandbox, then supervised preparation/approval with explicit customer agreement.
 Success thresholds: agree with the partner after baseline collection.

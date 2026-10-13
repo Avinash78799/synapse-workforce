@@ -1,6 +1,10 @@
 # Requirements and implementation status
 
-V1.1 changes and the production roadmap mapping are in `hardening-status.md`. Latest local evidence: **72 passed, 9 native-only skipped using PGlite and a lightweight dispatcher**, not native authentication/concurrency or Docker qualification.
+**Current implementation (26 September 2026): sandbox-tested; live business-vendor integrations are not verified.** Read-only Zendesk OAuth, the Trust Dashboard, internal founder onboarding and a narrow triage demo are implemented in source. Current verification: 129 passed, 105 skipped, two tracked warnings; TypeScript passed, full Next.js build blocked by Windows process-creation permissions. Database migrations, native integration tests and deployment of these changes are pending. Gate 1 passed against the previous deployment. The historical 185-test native result does not qualify this change. See [current evidence and limitations](trust-milestone-20260926.md), [backend gate order](backend-completion-plan.md) and [client wording](client-readiness.md).
+
+The older blueprint mapping below is historical. The current backend gate plan and trust milestone take precedence over its older “next work” list.
+
+Vendor account registration and bounded read-only Shopify/Zendesk inspection are implemented; see [vendor connections](vendor-connections.md). These checks do not enable autonomous vendor actions or establish live-vendor verification.
 
 The source of truth is Blueprint v1.2, especially the V1 scope lock in §44. The supplementary prompts/skills document tightens the execution boundaries without moving voice, additional agents, or real integrations into V1.
 
@@ -56,10 +60,8 @@ The source of truth is Blueprint v1.2, especially the V1 scope lock in §44. The
 
 ## Next concrete work, in order
 
-1. Run the delivered Docker stack and native PostgreSQL test suite, including concurrency, process termination, Redis recovery, and startup-role checks.
-2. Supply a chosen live model endpoint/model, explicit price schedule, and Vault key; run model/usage contract tests before enabling it for a user workspace.
-3. Build and score a broader agent benchmark dataset. Current policy contracts are useful safety checks, not an LLM accuracy benchmark.
-4. Configure a deployment host, HTTPS, backups, managed Vault/KMS, scoped identities, real user provisioning, and operational alerts.
-5. Begin V2 with one sandbox integration. Verify its idempotency, reconciliation, webhook authentication, rate limits, credentials, and approval notifications before enabling real business effects.
+Follow [backend-completion-plan.md](backend-completion-plan.md): qualify Gate 2 OAuth implementation, then real Zendesk lifecycle (Gate 3), then controlled writes (Gate 4). Per-action automation and reversal follow Gate 4. Preserve the live-vendor qualification caveat.
 
 The roadmap review incorrectly grouped autonomy levels 3–5 together: level 3 already required every mutation to be approved. We preserved that behavior and clarified the shared 0–2 and 4–5 boundaries.
+
+Latest local deployment evidence and remaining backend work: [deployment verification](deployment-verification-20260921.md).

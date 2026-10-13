@@ -17,3 +17,22 @@
 @media(max-width:650px){.sidebar nav{overflow-x:auto;justify-content:flex-start}.nav-item{flex-shrink:0;min-width:48px;padding:14px}.control-intro{flex-wrap:wrap;padding:18px}.control-intro .button{margin-left:0}.budget-metrics .metric>strong{font-size:21px}.control-note{font-size:12px}.panel-heading .filters{flex-wrap:wrap}}
 
 @media(max-width:650px){.sidebar .nav-item{gap:0;flex:1;min-width:44px;padding:14px 10px}}
+
+/* Business onboarding and integration controls share the existing dashboard theme. */
+.client-area {display:grid;gap:20px;min-width:0}
+.client-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:18px}
+.client-form {display:grid;gap:16px;max-width:640px;margin-top:18px}
+.client-form label {display:grid;gap:7px}
+.client-form fieldset {border:1px solid #d9dee8;border-radius:10px;padding:14px}
+.client-form input,.client-form select,.secret-box textarea {width:100%;min-width:0;border:1px solid #d9dee8;border-radius:8px;padding:10px;background:#fff;color:#17233b}
+.client-check {display:flex!important;align-items:flex-start;gap:9px!important;margin:10px 0}
+.client-check input {width:auto!important;margin-top:4px}
+.client-card {display:flex;flex-direction:column;gap:12px}
+.client-card .filters {margin-top:auto;flex-wrap:wrap}
+.client-key {padding:16px 0;border-bottom:1px solid #e3e8ef;overflow-wrap:anywhere}
+.client-onboarding {width:min(720px,calc(100vw - 32px));margin:24px auto;padding:28px}
+.secret-box {border:2px solid #879bf0;overflow-wrap:anywhere}
+.client-area .filters {flex-wrap:wrap}
+.client-area pre {white-space:pre-wrap;overflow-wrap:anywhere}
+
+.trust-facts{display:grid;grid-template-columns:minmax(120px,180px) 1fr;gap:10px 20px;margin-top:18px}.trust-facts dt{font-weight:600}.trust-facts dd{margin:0;overflow-wrap:anywhere}.checklist-stage{margin-bottom:20px}.checklist-item{border:1px solid var(--border,#d1d5db);border-radius:8px;padding:16px;margin:20px 0}.checklist-item legend{font-weight:600;padding:0 8px}.checklist-item textarea{min-height:70px}@media(max-width:600px){.trust-facts{grid-template-columns:1fr;gap:6px}.trust-facts dd{margin-bottom:10px}}

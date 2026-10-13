@@ -33,7 +33,9 @@ services:
   api:
     restart: unless-stopped
     environment:
+      APP_ENV: production
       SECURE_COOKIES: "true"
+      WORKSPACE_SIGNUP_ENABLED: "false"
     deploy:
       resources:
         limits:
@@ -47,6 +49,8 @@ services:
 
   worker:
     restart: unless-stopped
+    environment:
+      APP_ENV: production
     deploy:
       resources:
         limits:
@@ -57,6 +61,11 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+
+  oauth-worker:
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
 
   web:
     restart: unless-stopped

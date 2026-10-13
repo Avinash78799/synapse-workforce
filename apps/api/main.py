@@ -718,3 +718,17 @@ def report_breach(body: BreachInput, user=Depends(current_user)):
               details={'breach_id': record.get('id'), 'severity': body.severity})
     return {'breach_record': record, 'dpbi_regulatory_notification': notification}
 
+
+
+from apps.api.client_routes import install_client_routes
+install_client_routes(app,current_user,rate_limit)
+from apps.api.webhook_routes import install_webhook_routes
+install_webhook_routes(app,current_user,rate_limit)
+from apps.api.vendor_routes import install_vendor_routes
+install_vendor_routes(app,current_user,rate_limit)
+from apps.api.oauth_routes import install_oauth_routes
+install_oauth_routes(app,current_user,rate_limit)
+from apps.api.trust_routes import install_trust_routes
+install_trust_routes(app,current_user)
+from apps.api.onboarding_routes import install_onboarding_routes
+install_onboarding_routes(app,current_user,rate_limit)

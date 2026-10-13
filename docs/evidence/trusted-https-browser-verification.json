@@ -1,0 +1,28 @@
+{
+  "verified_at": "2026-09-25T23:05:14.2642161+05:30",
+  "target": "https://localhost/",
+  "gate": "Gate 1 trusted HTTPS browser interactions",
+  "result": "passed",
+  "certificate_bypass_used": false,
+  "api_checks": [
+    "health 200",
+    "home 200",
+    "owner login 200",
+    "auth/me 200",
+    "dashboard 200",
+    "approvals 200",
+    "logout 200",
+    "auth/me after logout 401"
+  ],
+  "browser_checks": [
+    "login page rendered",
+    "owner sign-in succeeded",
+    "Workforce dashboard loaded with two agents",
+    "Approvals screen loaded",
+    "Vendor Connections screen loaded",
+    "sign-out returned to login"
+  ],
+  "credential_changed": false,
+  "application_code_changed": false,
+  "limitation": "Docker named-pipe access remains unavailable to this session; service and worker container status not inspected. No live vendor connectivity exercised."
+}

@@ -2,7 +2,7 @@
 from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 from core.runtime.audit import audit
-from core.runtime.executor import digest
+from core.runtime.executor import digest, connector_for
 from core.tools.registry import TOOLS
 from core.connectors import get_connector
 
@@ -31,7 +31,7 @@ def resolve(conn,user,task_id,choice,reason):
         # business records, otherwise matching order IDs in another agent could
         # appear to prove this action succeeded.
         conn.execute("SELECT set_config('app.agent_id',%s,true)",(str(task['agent_id']),))
-        connector = get_connector(tool.name)
+        connector = connector_for(conn, tool.name)
         try:
             result=connector.reconcile(conn,tool.name,args,task['idempotency_key'])
         except RuntimeError:

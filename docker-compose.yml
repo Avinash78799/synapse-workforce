@@ -6,6 +6,7 @@ x-runtime: &runtime
   REDIS_URL: redis://redis:6379/0
   WEB_ORIGIN: ${WEB_ORIGIN:-https://localhost}
   SECURE_COOKIES: ${SECURE_COOKIES:-true}
+  WORKSPACE_SIGNUP_ENABLED: ${WORKSPACE_SIGNUP_ENABLED:-true}
   MODEL_PROVIDER: ${MODEL_PROVIDER:-simulation}
   LLM_BASE_URL: ${LLM_BASE_URL:-}
   LLM_MODEL: ${LLM_MODEL:-}
@@ -34,8 +35,10 @@ x-runtime: &runtime
   HELPDESK_CONNECTOR: ${HELPDESK_CONNECTOR:-simulation}
   EXTERNAL_CONNECTOR_BASE_URL: ${EXTERNAL_CONNECTOR_BASE_URL:-}
   EXTERNAL_CONNECTOR_SECRET: ${EXTERNAL_CONNECTOR_SECRET:-}
+  APP_ENV: ${APP_ENV:-development}
   VAULT_ADDR: ${VAULT_ADDR:-http://vault:8200}
   VAULT_TOKEN_FILE: /run/secrets/vault_token
+  ZENDESK_OAUTH_ENABLED: ${ZENDESK_OAUTH_ENABLED:-false}
   AUDIT_SIGNING_KEY_FILE: /run/secrets/audit_signing_key
 
 services:
@@ -84,8 +87,10 @@ services:
 
   api:
     build: {context: ., dockerfile: infrastructure/Dockerfile.api}
-    environment: *runtime
-    secrets: [vault_token, audit_signing_key]
+    environment:
+      <<: *runtime
+      WEBHOOK_SIGNING_KEY_FILE: /run/secrets/webhook_signing_key
+    secrets: [vault_token, audit_signing_key, webhook_signing_key]
     depends_on:
       seed: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -107,6 +112,21 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    depends_on:
+      api: {condition: service_healthy}
+
+  oauth-worker:
+    build: {context: ., dockerfile: infrastructure/Dockerfile.api}
+    command: [python, -m, infrastructure.workers.oauth_worker]
+    environment:
+      <<: *runtime
+      DISPATCH_DATABASE_URL: postgresql://wf_dispatch:${DISPATCH_DB_PASSWORD}@postgres:5432/workforce
+    secrets: [vault_token, audit_signing_key]
+    healthcheck:
+      test: [CMD, python, -c, "import os,time; assert time.time()-os.stat('/tmp/workforce-oauth.heartbeat').st_mtime < 120"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
     depends_on:
       api: {condition: service_healthy}
 
@@ -138,6 +158,8 @@ services:
     # Dev Vault is intentionally ephemeral. Use managed Vault/KMS for deployment.
 
 secrets:
+  webhook_signing_key:
+    file: ./.secrets/webhook_signing_key
   audit_signing_key:
     file: ./.secrets/audit_signing_key
   vault_token:

@@ -1,5 +1,7 @@
 # Production roadmap response — V1.1
 
+**Historical report.** For the current client milestone, use [client readiness](client-readiness.md) and [verification follow-ups](verification-followups.md). Sandbox tests and earlier LLM provider checks do not establish live business-vendor verification or production readiness.
+
 The supplied `production-roadmap-review.txt` is retained unchanged. This update implements the local engineering work described below; it does not claim that the market-service roadmap is complete.
 
 **Current evidence:** 72 automated checks passed, 9 native-only checks skipped. Executed database checks used PGlite with explicit transaction-local roles; browser checks used a lightweight dispatcher. Native login authentication, concurrency, the real supervisor, Docker boot, and live provider billing remain unverified here.

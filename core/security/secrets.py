@@ -39,7 +39,26 @@ class VaultSecrets:
         if not row:
             raise PermissionError('Credential is not authorized for this agent')
         path=f'tenants/{tenant_id}/agents/{agent_id}/integrations/{reference}'
-        value=self.read(path)
+        # The installation lock also serializes token refresh and revocation.
+        installation=conn.execute('SELECT id,revoked_at FROM vendor_installations WHERE secret_ref=%s FOR UPDATE', (reference,)).fetchone()
+        oauth=None
+        if installation:
+            if installation['revoked_at']:
+                raise PermissionError('Installation revoked')
+            oauth=conn.execute('SELECT *,expires_at>now() AS usable FROM vendor_oauth_connections WHERE installation_id=%s', (installation['id'],)).fetchone()
+        if oauth:
+            if oauth['status']!='active' or not oauth['usable']:
+                raise PermissionError('OAuth connection is not active')
+            from core.security.oauth_vault import OAuthVault
+            try:
+                material=OAuthVault().read(path+'/oauth-tokens/'+str(oauth['generation']))
+                if material.get('generation')!=str(oauth['generation']):
+                    raise ValueError('Token generation mismatch')
+                value=material['value']
+            except Exception:
+                raise RuntimeError('OAuth credential unavailable') from None
+        else:
+            value=self.read(path)
         fresh=conn.execute('SELECT status,execution_epoch FROM agents WHERE id=%s AND tenant_id=%s',
                            (agent_id,tenant_id)).fetchone()
         if not fresh or fresh['status']!='active' or fresh['execution_epoch']!=agent['execution_epoch']:

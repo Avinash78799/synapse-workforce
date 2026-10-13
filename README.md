@@ -2,9 +2,11 @@
 
 A V1 simulation implementation with the V1.1 hardening update of **Blueprint v1.2**, incorporating the supplied **Production Prompts & Skills v1.0**. The source documents, including the latest production roadmap review, are preserved in `docs/`.
 
-**Verification:** 72 tests passed and 9 native-only tests skipped using PGlite transaction-local roles and a lightweight browser dispatcher. Native PostgreSQL authentication/concurrency, the real supervisor, and Docker cold boot are **not verified** here. Compose/Docker definitions are supplied; images were not built or booted. See `docs/verification.md`.
+**Current implementation (26 September 2026): sandbox-tested; live business-vendor integrations are not verified.** Read-only Zendesk OAuth, the Trust Dashboard, internal founder onboarding and a narrow triage demo are implemented in source. Current verification: 129 passed, 105 skipped, two tracked warnings; TypeScript passed, full Next.js build blocked by Windows process-creation permissions. Database migrations, native integration tests and deployment of these changes are pending. Gate 1 passed against the previous deployment. The historical 185-test native result does not qualify this change. See [current evidence and limitations](docs/trust-milestone-20260926.md), [backend gate order](docs/backend-completion-plan.md) and [client wording](docs/client-readiness.md).
 
-Two independent workers operate on separate Acme Commerce simulation datasets: Operations and Customer Support. The control plane submits real persisted jobs, shows execution and verification, routes approvals, and manages permissions. The default model provider is explicitly **deterministic simulation**; it does not pretend to be a live LLM.
+Vendor account registration and bounded read-only Shopify/Zendesk inspection are implemented; see [vendor connections](docs/vendor-connections.md). These checks do not enable autonomous vendor actions or establish live-vendor verification.
+
+The default fresh demo is **Zendesk-style support ticket triage for a small ecommerce shop**: inspect a fictional payment complaint, request approval, and escalate it to a person. It sends no customer reply and issues no refund. Existing workspaces are preserved. Operations and the broader refund scenarios remain regression fixtures, not the current demo offer. The default model provider is deterministic simulation.
 
 ## Start locally
 
@@ -17,7 +19,7 @@ python infrastructure/configure_local.py
 docker compose up --build -d
 ```
 
-Open **http://localhost:3000**. Sign in with `owner@acme.local` and the `SEED_PASSWORD` value in the generated `.env` file.
+Open **https://localhost** (HTTP redirects to HTTPS). Sign in with `owner@acme.local` and the `SEED_PASSWORD` value in the generated `.env` file.
 
 The same local simulation password is assigned to these deliberately separate demo accounts:
 
@@ -27,11 +29,10 @@ The same local simulation password is assigned to these deliberately separate de
 | operator@acme.local | Submit work and inspect results; cannot approve refunds |
 | finance_approver@acme.local | Review and approve or deny pending financial actions |
 | viewer@acme.local | Inspect the workspace |
-| owner@northstar.local | Separate tenant for isolation checks |
 
 These are local simulation accounts. Do not publish them as production user accounts.
 
-First startup builds the services, migrates Postgres, seeds the fictional companies once, then starts the API, worker, and web app. Subsequent starts preserve existing records. If startup fails:
+First startup builds the services, migrates Postgres, seeds the fictional triage workspace once, then starts the API, worker, and web app. Subsequent starts preserve existing records. If startup fails:
 
 ```sh
 docker compose ps
@@ -44,17 +45,15 @@ docker compose logs --tail=80 migrate seed api worker web
 
 Preserve your database and existing `.env`. Run `python infrastructure/configure_audit.py` once to create the separate audit key, then rebuild with `docker compose up --build -d`. Migration `002_hardening.sql` is additive and preserves prior policy/audit records. Do not edit the checksum-protected initial migration. Save the audit key independently of the database.
 
-## Try the complete workflows
+## Try the support triage demo
 
-1. **Operations:** select **Run agent**, keep “Run today's operations,” and start. The worker checks 12 orders, retries eligible failed payments, requests shipment follow-ups, creates inventory tasks, and surfaces unresolved exceptions. A failed retry is reported honestly; it does not become a successful payment in the report.
-2. **Low-value support case:** choose Aarav / ORD-1001. The agent verifies a ₹2,400 duplicate, refunds the duplicate payment, reads the state back, resolves the ticket, and records a customer message in the simulation outbox.
-3. **High-value support case:** choose Emma / ORD-1002. The ₹75,000 duplicate waits for an independent owner or finance approver. If the owner requested it, sign out and sign in as `finance_approver@acme.local` to decide; the requester cannot approve or deny their own high-value action. Add a reason on the Approvals page. The worker resumes after the recorded decision.
-4. **Repeated claims:** choose Riya / ORD-1003. The ₹1,500 claim requires approval because of the repeated-claim signal.
-5. **No verified duplicate:** choose James / ORD-1004. The agent escalates the ticket without inventing a refundable payment.
-6. **Controls:** open an agent to toggle skills/tools, create a policy version, adjust autonomy, ingest reference text, and inspect memory. Pause blocks new work. A hard abort invalidates execution context; unlocking requires the owner password.
-7. **Evaluations:** run the 12-case policy contract suite. These are measured deterministic contract results, not model-accuracy or production-reliability claims.
+1. On a fresh seed, select **Support ticket triage demo** and start a fictional payment complaint.
+2. Open the **Trust Dashboard** to see the recorded reason and pending approval. The ticket update waits for a person.
+3. Review the proposed escalation on **Approvals**. Use the separate finance approver demo account to approve or reject it, adding a reason.
+4. An approved case is escalated for human resolution. Inspect its outcome and verification. No refund or customer message is generated.
+5. Repeating the same order returns its existing case. It does not create another action.
 
-Support requests for the same order attach to one persisted case, including after completion. Submitting the same order again will show the original case instead of refunding again. Restarting an already completed daily Operations run is permitted, while simultaneous daily triggers coalesce.
+Existing databases retain their previous agents and cases; the seed does not rewrite historical records. Do not erase an existing database to change the demo. Broader Operations/refund workflows are exercised through the explicit `legacy_regression` test fixture.
 
 ## What is implemented
 
@@ -96,7 +95,7 @@ python -m pytest tests/unit -q
 
 Security and workflow tests require a **disposable** native PostgreSQL database with pgvector and an isolated Redis DB. Set `TEST_DATABASE_URL` to a migration-owner connection whose database name ends in `_test`, and set `DATABASE_URL`, `AUTH_DATABASE_URL`, `REDIS_URL`, `APP_DB_PASSWORD`, `AUTH_DB_PASSWORD`, `DISPATCH_DB_PASSWORD`, and `SEED_PASSWORD`. The fixture migrates and resets only that test database. Never point the tests at a deployment database or a shared Redis database.
 
-Run `python infrastructure/native_gate.py` on a Docker-capable machine for disposable native tests, a complete cold boot, a high-value approval through the real worker, and a Redis outage/recovery check. `.github/workflows/verify.yml` runs this gate and the frontend build when installed in a GitHub repository. Neither the gate nor hosted CI has run here.
+Run `python infrastructure/native_gate.py` on a Docker-capable machine for disposable native tests, a complete cold boot, a triage approval through the real worker, and a Redis outage/recovery check. `.github/workflows/verify.yml` runs this gate and the frontend build when installed in a GitHub repository. Neither the gate nor hosted CI has run here.
 
 The supplied isolated test stack configures the database services automatically:
 
@@ -136,3 +135,5 @@ The project does not need Gmail, Slack, payment, or voice accounts to run its V1
 **Reconciliation** lists UNKNOWN receipts. Owners/finance approvers can verify fresh provider evidence or close an unresolved action. Neither option retries a mutation, sends a customer message, or resumes the run. **Model budget** separates recorded run costs from conservative daily reservations; simulation remains explicitly labeled. **Audit log** exports authenticated history, with legacy unsigned rows counted. **Approvals** shows independent-review requirements and security signals.
 
 Read `docs/hardening-status.md`, `docs/operations-runbook.md`, and `docs/product-validation.md` for roadmap coverage and the next concrete decisions.
+
+Latest local deployment evidence and remaining backend work: [deployment verification](docs/deployment-verification-20260921.md).
