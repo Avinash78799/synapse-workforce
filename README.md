@@ -1,4 +1,4 @@
-# AI Agent Workforce Platform — V1.1 hardening
+# AI Agent Workforce Platform — A
 
 A V1 simulation implementation with the V1.1 hardening update of **Blueprint v1.2**, incorporating the supplied **Production Prompts & Skills v1.0**. The source documents, including the latest production roadmap review, are preserved in `docs/`.
 
